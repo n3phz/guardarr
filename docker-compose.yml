@@ -1,0 +1,30 @@
+services:
+  guardarr:
+    build: .
+    image: guardarr:latest
+    container_name: guardarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GUARDARR_DATA_DIR=/config
+      - GUARDARR_STORAGE_PATH=/data
+      - WARNING_THRESHOLD_BYTES=1000000000000
+      - ADMISSION_FLOOR_BYTES=750000000000
+      - EMERGENCY_THRESHOLD_BYTES=500000000000
+      - CRITICAL_THRESHOLD_BYTES=250000000000
+      - DATABASE_URL=sqlite:////config/guardarr.db
+      - TZ=UTC
+    volumes:
+      - guardarr-config:/config
+      - guardarr-storage:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  guardarr-config:
+  guardarr-storage:

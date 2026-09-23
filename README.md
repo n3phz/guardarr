@@ -217,82 +217,78 @@ The first Guardarr release is intentionally focused.
 
 ### In scope
 
-- Filesystem-aware capacity calculation
-- Persistent reservation ledger
-- Atomic and idempotent admissions
-- qBittorrent controlled admission
-- Reservation lifecycle
-- Basic reconciliation
-- Conservative storage accounting
-- Fail-closed behaviour
-- API-first operation
+- Storage monitoring and threshold state
+- Reservation-ledger backed admission
+- qBittorrent controlled admission and tagging
+- Sonarr / Radarr request interception
+- Seerr / Jellyseerr request integration
+- Reconciliation between reservations, filesystem, and download state
+- REST API for health, readiness, and status
+- Docker deployment
 
-### Deliberately deferred
+### Out of scope
 
-These are possible future extensions, not requirements for the core product:
+- Media retention or deletion policies
+- Replacing *Arr download clients
+- AI-based admission decisions
+- Autonomous override of storage safety checks
 
-- AI / OpenClaw / Hermes integration
-- Media cleanup or retention
-- Distributed deployments
-- Additional download clients
-- Elaborate dashboards
-- Automatic remediation
-- Complex storage orchestration
-- Advanced policy optimisation
+## Features
 
-The interfaces should remain extensible, but the MVP should remain small.
+- **Storage Monitoring** — Real-time filesystem statistics via `statvfs`
+- **Threshold Management** — Configurable admission floor, warning, emergency, and critical thresholds
+- **Inode Tracking** — Monitor inode exhaustion
+- **REST API** — FastAPI-based endpoints for health, readiness, and status
+- **Docker** — Single-container deployment with Docker Compose
 
-## Project status
+## Quick Start
 
-Guardarr is under active development and the core implementation is being verified.
-
-Implemented layers currently include:
-
-- admission and reservation
-- persistent reservation lifecycle
-- qBittorrent integration
-- Sonarr / Radarr integration
-- Seerr / Jellyseerr integration
-- reconciliation and safety checks
-
-The immediate goal is not to add more functionality.
-
-It is to **prove that the admission-control model reliably prevents storage exhaustion under realistic concurrent workloads**.
-
-## What success looks like
-
-Guardarr should be able to handle scenarios such as:
-
-```text
-800 GB available
-
-300 GB request ──┐
-300 GB request ──┼── Guardarr
-300 GB request ──┘
-
-Expected:
-  Request A → ALLOW
-  Request B → ALLOW
-  Request C → DENY
-
-After A completes/imports:
-  Reservation A → RELEASED
-  Request C → can be evaluated again
+```bash
+cp .env.example .env
+docker compose up -d
 ```
 
-The product is successful if this remains reliable through retries, restarts, imports, hardlinks, cross-seeds and unexpected external storage consumption.
+## Configuration
 
-## Philosophy
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GUARDARR_DATA_DIR` | `/config` | Data directory for configuration and database |
+| `GUARDARR_STORAGE_PATH` | `/data` | Path to monitored storage |
+| `WARNING_THRESHOLD_BYTES` | `1000000000000` (1 TB) | Warning threshold |
+| `ADMISSION_FLOOR_BYTES` | `750000000000` (750 GB) | Admission floor |
+| `EMERGENCY_THRESHOLD_BYTES` | `500000000000` (500 GB) | Emergency threshold |
+| `CRITICAL_THRESHOLD_BYTES` | `250000000000` (250 GB) | Critical threshold |
+| `DATABASE_URL` | `sqlite:////config/guardarr.db` | Database URL |
+| `TZ` | `UTC` | Timezone |
 
-Guardarr follows one simple rule:
+## API Endpoints
 
-> **Never let an automated download consume storage that the system has not safely admitted.**
+- `GET /api/health` — Health check
+- `GET /api/ready` — Readiness check with filesystem validation
+- `GET /api/status` — Full status with thresholds and inodes
 
-Everything else should remain someone else's job.
+## Threshold States
+
+| State | Condition |
+|-------|-----------|
+| `NORMAL` | Available > Warning threshold |
+| `WARNING` | Available ≤ Warning threshold |
+| `BLOCKED` | Available ≤ Admission floor |
+| `EMERGENCY` | Available ≤ Emergency threshold |
+| `CRITICAL` | Available ≤ Critical threshold |
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+## License
+
+MIT
 
 ---
-
-<div align="center">
 
 **Guardarr** · Storage Admission & Protection for the *Arr ecosystem
 
