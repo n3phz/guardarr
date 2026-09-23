@@ -1,0 +1,13 @@
+#########################################################################
+# Title:         Guardarr (Saltbox integration) Role                    #
+# Author(s):     n3phz                                                  #
+# URL:           https://github.com/n3phz/guardarr                      #
+#########################################################################
+---
+- name: "Execute Guardarr roles"
+  ansible.builtin.include_tasks: main2.yml
+  vars:
+    guardarr_name: "{{ instance }}"
+  with_items: "{{ guardarr_instances }}"
+  loop_control:
+    loop_var: instance

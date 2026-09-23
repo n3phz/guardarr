@@ -1,0 +1,22 @@
+#########################################################################
+# Title:         Guardarr (Saltbox integration) Role                    #
+# Author(s):     n3phz                                                  #
+# URL:           https://github.com/n3phz/guardarr                      #
+#########################################################################
+---
+- name: Assert a published image tag is configured
+  ansible.builtin.assert:
+    that:
+      - lookup('role_var', '_docker_image_tag', role='guardarr') | length > 0
+    fail_msg: >-
+      guardarr_role_docker_image_tag is empty. Pin an immutable published
+      version of ghcr.io/n3phz/guardarr before deploying this role.
+
+- name: Remove existing Docker container
+  ansible.builtin.include_tasks: "{{ resources_tasks_path }}/docker/remove_docker_container.yml"
+
+- name: Create directories
+  ansible.builtin.include_tasks: "{{ resources_tasks_path }}/directories/create_directories.yml"
+
+- name: Create Docker container
+  ansible.builtin.include_tasks: "{{ resources_tasks_path }}/docker/create_docker_container.yml"

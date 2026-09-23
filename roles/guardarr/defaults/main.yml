@@ -1,0 +1,96 @@
+##########################################################################
+# Title:         Guardarr (Saltbox integration) | Default Variables      #
+# Author(s):     n3phz                                                   #
+# URL:           https://github.com/n3phz/guardarr                       #
+##########################################################################
+---
+################################
+# Basics
+################################
+
+guardarr_instances: ["guardarr"]
+
+################################
+# Paths
+################################
+
+guardarr_role_paths_folder: "{{ guardarr_name }}"
+guardarr_role_paths_location: "{{ server_appdata_path }}/{{ guardarr_role_paths_folder }}"
+guardarr_role_paths_folders_list:
+  - "{{ guardarr_role_paths_location }}"
+
+################################
+# Storage Boundary
+################################
+
+# Host path monitored by Guardarr via statvfs()/stat() (read-only inside the container).
+# /mnt/unionfs is the Saltbox mergerfs unified storage mount — verified on saltbox2:
+#   mergerfs 7.3T, mounted rw,nosuid,nodev,noatime,...,allow_other
+guardarr_storage_path: "/mnt/unionfs"
+
+################################
+# Docker
+################################
+
+# Container
+guardarr_role_docker_container: "{{ guardarr_name }}"
+
+# Image
+guardarr_role_docker_image_pull: true
+guardarr_role_docker_image_repo: "ghcr.io/n3phz/guardarr"
+# Pin a published immutable version tag once the GHCR workflow exists.
+# Until then this role MUST NOT be deployed (see tasks/main2.yml assert).
+guardarr_role_docker_image_tag: ""
+guardarr_role_docker_image: "{{ lookup('role_var', '_docker_image_repo', role='guardarr') }}:{{ lookup('role_var', '_docker_image_tag', role='guardarr') }}"
+
+# Envs
+# PUID/PGID are honored by docker-entrypoint.sh (remaps the guardarr user and
+# drops privileges before launching uvicorn). uid/gid come from Saltbox global
+# inventory (ansible_local.saltbox.users[user.name]).
+guardarr_role_docker_envs_default:
+  PUID: "{{ uid }}"
+  PGID: "{{ gid }}"
+  GUARDARR_DATA_DIR: "/config"
+  GUARDARR_STORAGE_PATH: "/data"
+  DATABASE_URL: "sqlite:////config/guardarr.db"
+  TZ: "{{ tz }}"
+guardarr_role_docker_envs_custom: {}
+guardarr_role_docker_envs: "{{ lookup('role_var', '_docker_envs_default', role='guardarr')
+                               | combine(lookup('role_var', '_docker_envs_custom', role='guardarr')) }}"
+
+# Volumes
+guardarr_role_docker_volumes_default:
+  - "{{ lookup('role_var', '_paths_location', role='guardarr') }}:/config"
+  - "{{ lookup('role_var', '_storage_path', role='guardarr') }}:/data:ro"
+guardarr_role_docker_volumes_custom: []
+guardarr_role_docker_volumes: "{{ lookup('role_var', '_docker_volumes_default', role='guardarr')
+                                  + lookup('role_var', '_docker_volumes_custom', role='guardarr') }}"
+
+# Hostname
+guardarr_role_docker_hostname: "{{ guardarr_name }}"
+
+# Networks
+guardarr_role_docker_networks_alias: "{{ guardarr_name }}"
+guardarr_role_docker_networks_default: []
+guardarr_role_docker_networks_custom: []
+guardarr_role_docker_networks: "{{ docker_networks_common
+                                   + lookup('role_var', '_docker_networks_default', role='guardarr')
+                                   + lookup('role_var', '_docker_networks_custom', role='guardarr') }}"
+
+# Restart Policy
+guardarr_role_docker_restart_policy: unless-stopped
+
+# Healthcheck (matches the image's built-in HEALTHCHECK; explicit here so Saltbox
+# autoheal/diun see a consistent definition)
+guardarr_role_docker_healthcheck:
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+  interval: 30s
+  timeout: 5s
+  start_period: 10s
+  retries: 3
+
+# Labels
+guardarr_role_docker_labels_default: {}
+guardarr_role_docker_labels_custom: {}
+guardarr_role_docker_labels: "{{ lookup('role_var', '_docker_labels_default', role='guardarr')
+                                 | combine(lookup('role_var', '_docker_labels_custom', role='guardarr')) }}"
