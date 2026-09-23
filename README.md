@@ -4,7 +4,7 @@
 
 ### Storage Admission & Protection for the *Arr ecosystem
 
-**Prevent storage exhaustion before the next download becomes a problem.**
+**Prevent concurrent automated downloads from exceeding a defined storage budget.**
 
 [![Status](https://img.shields.io/badge/status-active%20development-orange)](https://github.com/n3phz/guardarr)
 [![API](https://img.shields.io/badge/API-FastAPI-009688)](https://fastapi.tiangolo.com/)
@@ -14,17 +14,37 @@
 
 ---
 
-## Why Guardarr?
+## The problem
 
 The *Arr ecosystem is very good at deciding **what** to download.
 
-It is not designed to be the system that decides **whether there is enough storage to safely download it**.
+The harder problem is deciding **whether multiple automated requests can safely be admitted without exhausting storage**.
 
-Guardarr sits at that boundary.
+A simple free-space check is not enough when requests arrive concurrently:
 
-It evaluates available storage, reserves capacity, controls admission into qBittorrent, and tracks the request until the media becomes owned by the library.
+```text
+Free:                 800 GB
 
-> **Guardarr is the storage safety layer — not another downloader, cleanup tool, or AI agent.**
+Request A:            300 GB  →  ALLOW
+Request B:            300 GB  →  ALLOW
+Request C:            300 GB  →  DENY
+```
+
+Without persistent reservations, all three requests can see the same 800 GB of free space and independently conclude that they can proceed.
+
+Guardarr introduces a storage admission layer between the request and the downloader.
+
+## The Guardarr thesis
+
+> **Guardarr prevents concurrent automated media downloads from exceeding a defined storage budget.**
+
+The core idea is deliberately narrow:
+
+**check → reserve → admit → observe → reconcile → release**
+
+The reservation ledger is the centre of the system. Integrations exist to make that ledger reliable across the *Arr ecosystem.
+
+Guardarr is **not** another downloader, cleanup system, retention manager, or AI agent.
 
 ## How it works
 
@@ -50,9 +70,9 @@ flowchart LR
     C -.-> E
 ```
 
-The important distinction is that **reservation happens before admission**.
+**Reservation happens before admission.**
 
-A request can therefore be rejected before it consumes additional storage.
+The system therefore accounts for concurrent requests before they are allowed to consume additional storage.
 
 ## Reservation lifecycle
 
@@ -88,19 +108,33 @@ A request can therefore be rejected before it consumes additional storage.
                     └──────────────┘
 ```
 
-Reservations are persistent and auditable, rather than being a transient calculation made at request time.
+Reservations are persistent and auditable rather than being a transient calculation made at request time.
 
 ## What Guardarr does
 
-- **Storage admission** — checks available capacity before accepting new downloads
-- **Reservations** — holds capacity for requested content
+### Core
+
+- **Storage admission** — determines whether a request fits within the available storage budget
+- **Reservations** — holds capacity for accepted requests
+- **Concurrency control** — accounts for multiple outstanding requests at the same time
 - **Lifecycle tracking** — follows reservations from request through import
-- **qBittorrent control** — performs controlled admission and deterministic tagging
-- **Reconciliation** — compares reservation, filesystem and download state
-- **Arr integration** — works with Sonarr and Radarr
-- **Request integration** — supports Seerr and Jellyseerr
-- **Bypass detection** — identifies unexpected/unreserved qBittorrent activity
+- **Reconciliation** — compares reservations with filesystem and download reality
 - **Fail-closed admission** — refuses new admissions when storage safety cannot be verified
+
+### Ecosystem integration
+
+- **qBittorrent control** — performs controlled admission and deterministic tagging
+- **Sonarr / Radarr** — connects media acquisition to the reservation lifecycle
+- **Seerr / Jellyseerr** — provides request-layer integration
+- **Bypass detection** — identifies unexpected or unreserved qBittorrent activity
+
+### Conservative storage accounting
+
+Storage ownership is not always perfectly observable.
+
+Hardlinks, cross-seeds, incomplete downloads, imports and external writers can make exact accounting difficult. Guardarr therefore prefers **conservative accounting over optimistic assumptions**.
+
+> When storage ownership cannot be safely determined, Guardarr assumes the more conservative interpretation.
 
 ## What Guardarr does *not* do
 
@@ -115,7 +149,9 @@ Guardarr deliberately has a narrow responsibility.
 | **Sonarr / Radarr** | Media acquisition & library management |
 | **Seerr / Jellyseerr** | User requests |
 
-This separation prevents storage admission, torrent lifecycle and media retention from becoming one large system with overlapping authority.
+Guardarr does not attempt to replace these systems.
+
+It protects the boundary between **automated requests** and **storage consumption**.
 
 ## Safety model
 
@@ -126,12 +162,14 @@ Guardarr treats storage safety as a **deterministic control problem**.
 - Storage safety is deterministic.
 - AI and agents are **never** the safety authority.
 - Reservations are persistent and auditable.
+- Concurrent requests are accounted for before admission.
 - Hardlinks and cross-seeds are handled conservatively.
 - Existing downloads are not deleted by Guardarr.
 - New admissions fail closed when safety cannot be established.
-- Emergency protection is independent of AI/orchestration.
+- Cleanup and retention remain outside Guardarr.
+- AI/orchestration cannot override a storage admission decision.
 
-That means an AI agent can help operate the surrounding infrastructure, but it cannot simply override Guardarr's storage decision.
+AI agents may eventually help operate or explain Guardarr, but the safety boundary remains deterministic.
 
 ## Built for the *Arr ecosystem
 
@@ -169,20 +207,76 @@ Guardarr is designed around the existing ecosystem rather than replacing it.
         └───────────────┘                    └───────────────┘
 ```
 
+## MVP scope
+
+The first Guardarr release is intentionally focused.
+
+### In scope
+
+- Filesystem-aware capacity calculation
+- Persistent reservation ledger
+- Atomic and idempotent admissions
+- qBittorrent controlled admission
+- Reservation lifecycle
+- Basic reconciliation
+- Conservative storage accounting
+- Fail-closed behaviour
+- API-first operation
+
+### Deliberately deferred
+
+These are possible future extensions, not requirements for the core product:
+
+- AI / OpenClaw / Hermes integration
+- Media cleanup or retention
+- Distributed deployments
+- Additional download clients
+- Elaborate dashboards
+- Automatic remediation
+- Complex storage orchestration
+- Advanced policy optimisation
+
+The interfaces should remain extensible, but the MVP should remain small.
+
 ## Project status
 
-Guardarr is under active development.
+Guardarr is under active development and the core implementation is being verified.
 
-The current implementation includes the core:
+Implemented layers currently include:
 
-- admission and reservation layer
+- admission and reservation
 - persistent reservation lifecycle
 - qBittorrent integration
 - Sonarr / Radarr integration
 - Seerr / Jellyseerr integration
 - reconciliation and safety checks
 
-The project is still being verified and hardened before a broader release.
+The immediate goal is not to add more functionality.
+
+It is to **prove that the admission-control model reliably prevents storage exhaustion under realistic concurrent workloads**.
+
+## What success looks like
+
+Guardarr should be able to handle scenarios such as:
+
+```text
+800 GB available
+
+300 GB request ──┐
+300 GB request ──┼── Guardarr
+300 GB request ──┘
+
+Expected:
+  Request A → ALLOW
+  Request B → ALLOW
+  Request C → DENY
+
+After A completes/imports:
+  Reservation A → RELEASED
+  Request C → can be evaluated again
+```
+
+The product is successful if this remains reliable through retries, restarts, imports, hardlinks, cross-seeds and unexpected external storage consumption.
 
 ## Philosophy
 
