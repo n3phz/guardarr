@@ -4,7 +4,11 @@
 
 ### Storage Admission & Protection for the *Arr ecosystem
 
-**Prevent concurrent automated downloads from exceeding a defined storage budget.**
+**Prevent concurrent automated media downloads from exceeding a defined storage budget.**
+
+<p>
+  <img src="docs/assets/guardarr-social-preview.jpg" alt="Guardarr visual identity and storage admission lifecycle" width="100%">
+</p>
 
 [![Status](https://img.shields.io/badge/status-active%20development-orange)](https://github.com/n3phz/guardarr)
 [![API](https://img.shields.io/badge/API-FastAPI-009688)](https://fastapi.tiangolo.com/)
