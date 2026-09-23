@@ -38,9 +38,8 @@ guardarr_role_docker_container: "{{ guardarr_name }}"
 # Image
 guardarr_role_docker_image_pull: true
 guardarr_role_docker_image_repo: "ghcr.io/n3phz/guardarr"
-# Pin a published immutable version tag once the GHCR workflow exists.
-# Until then this role MUST NOT be deployed (see tasks/main2.yml assert).
-guardarr_role_docker_image_tag: ""
+# Published immutable version tag (ghcr.io/n3phz/guardarr:0.1.0 verified 2026-09-23).
+guardarr_role_docker_image_tag: "0.1.0"
 guardarr_role_docker_image: "{{ lookup('role_var', '_docker_image_repo', role='guardarr') }}:{{ lookup('role_var', '_docker_image_tag', role='guardarr') }}"
 
 # Envs
