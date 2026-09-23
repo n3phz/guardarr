@@ -1,0 +1,14 @@
+.venv/
+.venv_clean/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+*.db
+*.sqlite3
+.env
+.env.local
+.env.production
