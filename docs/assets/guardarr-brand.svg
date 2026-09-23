@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+<title id="title">Guardarr — Media Request Guardrails</title>
+<desc id="desc">Guardarr visual identity with shield, media workflow and reservation lifecycle.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#050b16"/><stop offset="1" stop-color="#07182b"/></linearGradient>
+  <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#fbbf24"/></linearGradient>
+  <linearGradient id="green" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#22c55e"/></linearGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="12" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="1280" height="640" fill="url(#bg)"/>
+<circle cx="1030" cy="120" r="250" fill="#0b5cff" opacity=".08" filter="url(#glow)"/>
+<circle cx="1120" cy="520" r="260" fill="#00d9ff" opacity=".05" filter="url(#glow)"/>
+
+<!-- shield -->
+<g transform="translate(92 105)">
+  <path d="M112 0 224 40v103c0 83-48 143-112 176C48 286 0 226 0 143V40Z" fill="#0b1424" stroke="url(#blue)" stroke-width="10"/>
+  <path d="M112 24 200 55v85c0 65-35 114-88 145-53-31-88-80-88-145V55Z" fill="none" stroke="#1d8cff" stroke-width="4" opacity=".9"/>
+  <path d="M88 82 88 190 166 136Z" fill="#fff"/>
+</g>
+
+<!-- wordmark -->
+<text x="360" y="205" font-family="Inter,Arial,sans-serif" font-size="112" font-weight="800" letter-spacing="-5" fill="#fff">Guard</text>
+<text x="695" y="205" font-family="Inter,Arial,sans-serif" font-size="112" font-weight="800" letter-spacing="-5" fill="#20bfff">arr</text>
+<text x="365" y="250" font-family="Inter,Arial,sans-serif" font-size="22" letter-spacing="9" fill="#aab7c8">MEDIA REQUEST GUARDRAILS</text>
+
+<!-- integration rail -->
+<g font-family="Inter,Arial,sans-serif" font-size="18" font-weight="700" text-anchor="middle">
+  <rect x="360" y="295" width="145" height="56" rx="16" fill="#0c1a2d" stroke="#1f7cff"/>
+  <text x="432" y="330" fill="#dce8f5">Seerr</text>
+  <rect x="525" y="295" width="165" height="56" rx="16" fill="#0c1a2d" stroke="#8b5cf6"/>
+  <text x="607" y="330" fill="#dce8f5">Jellyseerr</text>
+  <rect x="710" y="295" width="145" height="56" rx="16" fill="#0c1a2d" stroke="#22d3ee"/>
+  <text x="782" y="330" fill="#dce8f5">Sonarr</text>
+  <rect x="875" y="295" width="145" height="56" rx="16" fill="#0c1a2d" stroke="#f59e0b"/>
+  <text x="947" y="330" fill="#dce8f5">Radarr</text>
+</g>
+
+<text x="360" y="397" font-family="Inter,Arial,sans-serif" font-size="18" letter-spacing="6" fill="#8fa4ba">VALIDATE  •  PROTECT  •  AUTOMATE</text>
+
+<!-- lifecycle -->
+<g font-family="Inter,Arial,sans-serif" text-anchor="middle">
+  <rect x="95" y="475" width="230" height="92" rx="20" fill="#0b1627" stroke="url(#gold)" stroke-width="2"/>
+  <text x="210" y="513" font-size="17" font-weight="800" fill="#fbbf24">RESERVED</text>
+  <text x="210" y="541" font-size="14" fill="#8fa4ba">capacity held</text>
+
+  <path d="M330 521h45" stroke="#668099" stroke-width="2"/><path d="m368 513 12 8-12 8" fill="none" stroke="#668099" stroke-width="2"/>
+
+  <rect x="395" y="475" width="230" height="92" rx="20" fill="#0b1627" stroke="#1d8cff" stroke-width="2"/>
+  <text x="510" y="513" font-size="17" font-weight="800" fill="#36a9ff">ACTIVE</text>
+  <text x="510" y="541" font-size="14" fill="#8fa4ba">controlled admission</text>
+
+  <path d="M630 521h45" stroke="#668099" stroke-width="2"/><path d="m668 513 12 8-12 8" fill="none" stroke="#668099" stroke-width="2"/>
+
+  <rect x="695" y="475" width="230" height="92" rx="20" fill="#0b1627" stroke="url(#green)" stroke-width="2"/>
+  <text x="810" y="513" font-size="17" font-weight="800" fill="#4ade80">OWNED</text>
+  <text x="810" y="541" font-size="14" fill="#8fa4ba">import reconciled</text>
+
+  <path d="M930 521h45" stroke="#668099" stroke-width="2"/><path d="m968 513 12 8-12 8" fill="none" stroke="#668099" stroke-width="2"/>
+
+  <rect x="995" y="475" width="190" height="92" rx="20" fill="#0b1627" stroke="#64748b" stroke-width="2"/>
+  <text x="1090" y="513" font-size="17" font-weight="800" fill="#cbd5e1">RELEASED</text>
+  <text x="1090" y="541" font-size="14" fill="#8fa4ba">capacity returned</text>
+</g>
+</svg>
