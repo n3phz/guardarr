@@ -80,7 +80,7 @@ def _activate_reservation(db, reservation_id, torrent_hash=None):
 def test_seerr_health_connected(mock_request):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {"version": "2.0.0.0"}
+    mock_resp.json.return_value = {"version": "3.4.1"}
     mock_request.return_value = mock_resp
 
     res = client.get("/api/seerr/health/seerr")
@@ -88,14 +88,14 @@ def test_seerr_health_connected(mock_request):
     data = res.json()
     assert data["provider"] == "seerr"
     assert data["status"] == "connected"
-    assert data["version"] == "2.0.0.0"
+    assert data["version"] == "3.4.1"
 
 
 @patch("app.integrations.seerr.base.requests.Session.request")
 def test_jellyseerr_health_connected(mock_request):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {"version": "3.0.0.0"}
+    mock_resp.json.return_value = {"version": "3.4.1"}
     mock_request.return_value = mock_resp
 
     res = client.get("/api/seerr/health/jellyseerr")
@@ -103,7 +103,7 @@ def test_jellyseerr_health_connected(mock_request):
     data = res.json()
     assert data["provider"] == "jellyseerr"
     assert data["status"] == "connected"
-    assert data["version"] == "3.0.0.0"
+    assert data["version"] == "3.4.1"
 
 
 def test_seerr_health_invalid_provider():

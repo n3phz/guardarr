@@ -21,7 +21,7 @@ class BaseSeerrClient(ABC):
         })
 
     def _request(self, method: str, endpoint: str, **kwargs) -> Optional[requests.Response]:
-        url = f"{self.base_url}/api/v3/{endpoint.lstrip('/')}"
+        url = f"{self.base_url}/api/v1/{endpoint.lstrip('/')}"
         try:
             response = self.session.request(method, url, timeout=self.timeout, verify=self.verify_tls, **kwargs)
             return response
@@ -46,7 +46,7 @@ class SeerrClient(BaseSeerrClient):
         )
 
     def test_connectivity(self) -> Dict[str, Any]:
-        response = self._request("GET", "system/status")
+        response = self._request("GET", "settings/about")
         if response and response.status_code == 200:
             try:
                 data = response.json()
@@ -67,7 +67,7 @@ class JellyseerrClient(BaseSeerrClient):
         )
 
     def test_connectivity(self) -> Dict[str, Any]:
-        response = self._request("GET", "system/status")
+        response = self._request("GET", "settings/about")
         if response and response.status_code == 200:
             try:
                 data = response.json()
