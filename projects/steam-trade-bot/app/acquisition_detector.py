@@ -1,0 +1,802 @@
+"""Acquisition event detection and reconciliation service.
+
+Cross-references inventory snapshots against Steam Market History to
+determine whether inventory increases represent verified acquisitions
+(TRACKED) or unverified observations (UNKNOWN).
+
+Architecture:
+  Inventory Snapshot Polling
+        ↓
+  Delta Detection (compare snapshots)
+        ↓
+  Market History Enrichment (query Steam)
+        ↓
+  Acquisition Recording (TRACKED or UNKNOWN)
+
+Phase 1 invariants preserved:
+  - TRACKED requires provenance
+  - UNKNOWN has unit_cost=None
+  - No cost fabrication
+  - Idempotent via source_key
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date, datetime, timezone, timedelta
+from decimal import Decimal
+from typing import Optional, Sequence
+
+from app.acquisition import record_acquisition, RecordedAcquisition, AcquisitionError, Repository
+from app.transactions import CostStatus, SourceType, Provenance, EvidenceType
+
+
+class AcquisitionDetectionError(ValueError):
+    """Raised when acquisition detection cannot proceed safely."""
+
+
+@dataclass(frozen=True)
+class InventorySnapshot:
+    """Immutable snapshot of inventory state at a point in time."""
+
+    snapshot_id: int
+    bot_name: str
+    captured_at: str
+    items: dict[str, int]  # market_hash_name -> quantity
+
+
+@dataclass(frozen=True)
+class InventoryDelta:
+    """Difference between two inventory snapshots."""
+
+    bot_name: str
+    market_hash_name: str
+    quantity_change: int  # positive = increase, negative = decrease
+    previous_quantity: int
+    current_quantity: int
+    detected_at: date
+
+
+@dataclass(frozen=True)
+class MarketHistoryPurchase:
+    """Normalized Market History purchase event with verified cost."""
+
+    listingid: str
+    purchaseid: str
+    market_hash_name: str
+    quantity: int
+    paid_amount_cents: int
+    currencyid: int
+    time_event_unix: int
+    external_ref: str  # "listingid:purchaseid"
+
+
+@dataclass(frozen=True)
+class AcquisitionResult:
+    """Result of an acquisition detection attempt."""
+
+    bot_name: str
+    market_hash_name: str
+    quantity: int
+    cost_status: CostStatus
+    source_type: Optional[SourceType]
+    provenance: Optional[Provenance]
+    created: bool  # True if new lot created, False if idempotent resolve
+    lot_id: Optional[str]
+    transaction_id: Optional[str]
+    error: Optional[str] = None
+
+
+class AcquisitionDetector:
+    """Detects acquisitions by cross-referencing inventory with Market History.
+
+    The detector maintains state about which snapshots have been processed
+    to avoid duplicate detection on repeated polling.
+    """
+
+    # Time window for Market History matching (hours)
+    # Purchases within ±24 hours of inventory observation are candidates
+    MATCHING_TIME_WINDOW_HOURS = 24
+
+    # Currency ID to ISO code mapping (Steam-specific)
+    CURRENCY_MAP = {
+        1: "USD",
+        2: "GBP",
+        3: "EUR",
+        5: "CHF",
+        8: "AUD",
+        9: "BRL",
+        10: "JPY",
+        11: "KRW",
+        12: "NOK",
+        13: "IDR",
+        14: "MYR",
+        16: "PHP",
+        17: "RUB",
+        18: "SGD",
+        19: "THB",
+        20: "TWD",
+        22: "ZAR",
+        24: "CAD",
+        25: "MXN",
+        26: "VND",
+        27: "PLN",
+        28: "CZK",
+        29: "HUF",
+        30: "CLP",
+        31: "PEN",
+        32: "ARS",
+        34: "INR",
+        35: "TRY",
+        36: "AED",
+        37: "RON",
+        38: "BGN",
+        39: "HRK",
+        40: "DKK",
+        41: "ISK",
+        42: "NZD",
+        43: "UAH",
+        44: "QAR",
+        45: "EGP",
+        46: "ILS",
+        47: "KWD",
+        48: "BHD",
+        49: "OMR",
+        50: "JOD",
+    }
+
+    def __init__(self, repository: Repository, bot_name: str):
+        """Initialize detector for a specific bot.
+
+        Args:
+            repository: Database repository with inventory snapshot access.
+            bot_name: Bot name to detect acquisitions for.
+        """
+        self.repository = repository
+        self.bot_name = bot_name
+        self._processed_snapshot_ids: set[int] = set()
+
+    def load_processed_snapshots(self) -> set[int]:
+        """Load already-processed snapshot IDs from database.
+
+        Returns:
+            Set of snapshot IDs that have already been analyzed.
+        """
+        try:
+            conn = self.repository.connection
+            rows = conn.execute(
+                """
+                SELECT DISTINCT snapshot_id
+                FROM acquisition_processing_log
+                WHERE bot_name = ?
+                """,
+                (self.bot_name,),
+            ).fetchall()
+            return {row[0] for row in rows}
+        except Exception:
+            # Table may not exist yet — return empty set
+            return set()
+
+    def get_latest_snapshot(self) -> Optional[InventorySnapshot]:
+        """Get the most recent inventory snapshot for this bot.
+
+        Returns:
+            InventorySnapshot if exists, None otherwise.
+        """
+        conn = self.repository.connection
+        row = conn.execute(
+            """
+            SELECT id, captured_at, item_count
+            FROM inventory_snapshots
+            WHERE bot_name = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (self.bot_name,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        snapshot_id, captured_at, _ = row
+
+        # Load items for this snapshot
+        items_rows = conn.execute(
+            """
+            SELECT market_hash_name, SUM(amount) as total_amount
+            FROM inventory_items
+            WHERE snapshot_id = ?
+            GROUP BY market_hash_name
+            """,
+            (snapshot_id,),
+        ).fetchall()
+
+        items = {row[0]: int(row[1]) for row in items_rows}
+
+        return InventorySnapshot(
+            snapshot_id=snapshot_id,
+            bot_name=self.bot_name,
+            captured_at=captured_at,
+            items=items,
+        )
+
+    def get_previous_snapshot(self, current_snapshot: InventorySnapshot) -> Optional[InventorySnapshot]:
+        """Get the snapshot immediately preceding the current one.
+
+        Args:
+            current_snapshot: The current snapshot to find predecessor for.
+
+        Returns:
+            Previous InventorySnapshot or None if this is the first.
+        """
+        conn = self.repository.connection
+        row = conn.execute(
+            """
+            SELECT id, captured_at, item_count
+            FROM inventory_snapshots
+            WHERE bot_name = ? AND id < ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (self.bot_name, current_snapshot.snapshot_id),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        snapshot_id, captured_at, _ = row
+
+        items_rows = conn.execute(
+            """
+            SELECT market_hash_name, SUM(amount) as total_amount
+            FROM inventory_items
+            WHERE snapshot_id = ?
+            GROUP BY market_hash_name
+            """,
+            (snapshot_id,),
+        ).fetchall()
+
+        items = {row[0]: int(row[1]) for row in items_rows}
+
+        return InventorySnapshot(
+            snapshot_id=snapshot_id,
+            bot_name=self.bot_name,
+            captured_at=captured_at,
+            items=items,
+        )
+
+    def calculate_deltas(self, previous: Optional[InventorySnapshot], current: InventorySnapshot) -> list[InventoryDelta]:
+        """Calculate inventory deltas between two snapshots.
+
+        Args:
+            previous: Previous snapshot (None for first observation).
+            current: Current snapshot.
+
+        Returns:
+            List of InventoryDelta objects for positive changes (acquisitions).
+        """
+        if previous is None:
+            # First snapshot — everything is new, but we can't determine if purchased
+            # Return as UNKNOWN candidates for later verification
+            deltas = []
+            for mhn, qty in current.items.items():
+                if qty > 0:
+                    deltas.append(InventoryDelta(
+                        bot_name=current.bot_name,
+                        market_hash_name=mhn,
+                        quantity_change=qty,
+                        previous_quantity=0,
+                        current_quantity=qty,
+                        detected_at=self._parse_date(current.captured_at),
+                    ))
+            return deltas
+
+        deltas = []
+        all_items = set(previous.items.keys()) | set(current.items.keys())
+
+        for mhn in all_items:
+            prev_qty = previous.items.get(mhn, 0)
+            curr_qty = current.items.get(mhn, 0)
+            change = curr_qty - prev_qty
+
+            if change > 0:
+                deltas.append(InventoryDelta(
+                    bot_name=current.bot_name,
+                    market_hash_name=mhn,
+                    quantity_change=change,
+                    previous_quantity=prev_qty,
+                    current_quantity=curr_qty,
+                    detected_at=self._parse_date(current.captured_at),
+                ))
+
+        return deltas
+
+    def _parse_date(self, iso_string: str) -> date:
+        """Parse ISO date string to date object."""
+        try:
+            dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
+            return dt.date()
+        except (ValueError, AttributeError):
+            return date.today()
+
+    def fetch_market_history_for_item(
+        self,
+        market_hash_name: str,
+        detected_at: date,
+        session,
+    ) -> list[MarketHistoryPurchase]:
+        """Fetch Market History purchases matching an item around detection time.
+
+        Args:
+            market_hash_name: Item to search for.
+            detected_at: Date of inventory observation.
+            session: Authenticated requests session for Steam API.
+
+        Returns:
+            List of MarketHistoryPurchase objects within time window.
+        """
+        # Calculate time window
+        start_date = detected_at - timedelta(days=7)  # Look back 7 days
+        end_date = detected_at + timedelta(hours=1)  # Allow 1 hour forward
+
+        # Fetch Market History pages until we find matches or exhaust
+        all_purchases = []
+        start = 0
+        count = 100
+
+        while start < 500:  # Safety limit
+            try:
+                raw_data = session.get(
+                    f"https://steamcommunity.com/market/myhistory/render/",
+                    params={"start": start, "count": count, "norender": 1},
+                    timeout=30,
+                ).json()
+
+                if not raw_data.get("success"):
+                    break
+
+                # Parse events using existing parser
+                from app.steam_market_history_json import adapt_response
+                normalized_events, errors = adapt_response(
+                    raw_data,
+                    account_steamid="",  # Will be filled by classifier
+                )
+
+                for event in normalized_events:
+                    if event.event_type != "BUY":
+                        continue
+                    if event.market_hash_name != market_hash_name:
+                        continue
+                    if event.time_event is None:
+                        continue
+
+                    try:
+                        event_date = datetime.fromisoformat(event.time_event).date()
+                    except (ValueError, AttributeError):
+                        continue
+
+                    if start_date <= event_date <= end_date:
+                        # Convert paid_amount from cents to Decimal
+                        paid_decimal = Decimal(event.paid_amount) / Decimal(100)
+
+                        all_purchases.append(MarketHistoryPurchase(
+                            listingid=event.listingid,
+                            purchaseid=event.purchaseid,
+                            market_hash_name=event.market_hash_name,
+                            quantity=int(event.asset_amount) if event.asset_amount else 1,
+                            paid_amount_cents=event.paid_amount,
+                            currencyid=event.currencyid,
+                            time_event_unix=self._iso_to_unix(event.time_event),
+                            external_ref=f"{event.listingid}:{event.purchaseid}",
+                        ))
+
+                # Check if we've fetched all available history
+                total_count = raw_data.get("total_count", 0)
+                if start + count >= total_count:
+                    break
+                start += count
+
+            except Exception:
+                break
+
+        return all_purchases
+
+    def _iso_to_unix(self, iso_string: str) -> int:
+        """Convert ISO timestamp to Unix timestamp."""
+        try:
+            dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
+            return int(dt.timestamp())
+        except (ValueError, AttributeError):
+            return 0
+
+    def find_matching_purchase(
+        self,
+        delta: InventoryDelta,
+        purchases: list[MarketHistoryPurchase],
+    ) -> Optional[MarketHistoryPurchase]:
+        """Find the best matching purchase for an inventory delta.
+
+        Matching criteria:
+        1. Same market_hash_name (already filtered)
+        2. Compatible quantity (purchase qty >= delta qty)
+        3. Within time window (already filtered)
+        4. Unique match (no ambiguity)
+
+        Args:
+            delta: Inventory change to match.
+            purchases: Candidate purchases from Market History.
+
+        Returns:
+            Best matching purchase or None if ambiguous/unmatched.
+        """
+        # Filter to purchases that could explain this delta
+        # Must match: same item AND compatible quantity
+        candidates = [
+            p for p in purchases
+            if p.market_hash_name == delta.market_hash_name
+            and p.quantity >= delta.quantity_change
+        ]
+
+        if len(candidates) == 0:
+            return None
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple candidates — check for unique best match
+        # Prefer exact quantity match first
+        exact_matches = [p for p in candidates if p.quantity == delta.quantity_change]
+        if len(exact_matches) == 1:
+            return exact_matches[0]
+
+        # If still ambiguous, return None (safer to mark UNKNOWN)
+        return None
+
+    def detect_acquisition(
+        self,
+        session,
+        process_new_snapshots: bool = True,
+    ) -> list[AcquisitionResult]:
+        """Main detection workflow.
+
+        1. Get current and previous snapshots
+        2. Calculate deltas
+        3. For each positive delta, query Market History
+        4. Match purchase if found
+        5. Record TRACKED or UNKNOWN lot
+
+        Args:
+            session: Authenticated Steam session.
+            process_new_snapshots: If True, only process unprocessed snapshots.
+
+        Returns:
+            List of AcquisitionResult objects.
+        """
+        results = []
+
+        # Load already-processed snapshots
+        self._processed_snapshot_ids = self.load_processed_snapshots()
+
+        # Get latest snapshot
+        current = self.get_latest_snapshot()
+        if current is None:
+            return results
+
+        # Check if already processed
+        if process_new_snapshots and current.snapshot_id in self._processed_snapshot_ids:
+            return results
+
+        # Get previous snapshot
+        previous = self.get_previous_snapshot(current)
+
+        # Calculate deltas
+        deltas = self.calculate_deltas(previous, current)
+
+        # Process each positive delta
+        for delta in deltas:
+            if delta.quantity_change <= 0:
+                continue
+
+            result = self._process_delta(delta, session)
+            results.append(result)
+
+        # Mark snapshot as processed
+        if process_new_snapshots:
+            self._mark_snapshot_processed(current.snapshot_id)
+
+        return results
+
+    def _process_delta(
+        self,
+        delta: InventoryDelta,
+        session,
+    ) -> AcquisitionResult:
+        """Process a single inventory delta.
+
+        Args:
+            delta: Inventory change to process.
+            session: Authenticated Steam session.
+
+        Returns:
+            AcquisitionResult indicating outcome.
+        """
+        try:
+            # Fetch Market History for this item
+            purchases = self.fetch_market_history_for_item(
+                delta.market_hash_name,
+                delta.detected_at,
+                session,
+            )
+
+            # Find matching purchase
+            matching_purchase = self.find_matching_purchase(delta, purchases)
+
+            if matching_purchase is not None:
+                # Verified acquisition — create TRACKED lot
+                return self._record_tracked(delta, matching_purchase)
+            else:
+                # No verified evidence — create UNKNOWN lot
+                return self._record_unknown(delta)
+
+        except AcquisitionError as exc:
+            return AcquisitionResult(
+                bot_name=delta.bot_name,
+                market_hash_name=delta.market_hash_name,
+                quantity=delta.quantity_change,
+                cost_status=CostStatus.UNKNOWN,
+                source_type=None,
+                provenance=None,
+                created=False,
+                lot_id=None,
+                transaction_id=None,
+                error=str(exc),
+            )
+        except Exception as exc:
+            return AcquisitionResult(
+                bot_name=delta.bot_name,
+                market_hash_name=delta.market_hash_name,
+                quantity=delta.quantity_change,
+                cost_status=CostStatus.UNKNOWN,
+                source_type=None,
+                provenance=None,
+                created=False,
+                lot_id=None,
+                transaction_id=None,
+                error=f"detection_error: {exc}",
+            )
+
+    def _record_tracked(
+        self,
+        delta: InventoryDelta,
+        purchase: MarketHistoryPurchase,
+    ) -> AcquisitionResult:
+        """Record a verified TRACKED acquisition.
+
+        Args:
+            delta: Inventory change observed.
+            purchase: Matching Market History purchase.
+
+        Returns:
+            AcquisitionResult with TRACKED status.
+        """
+        # Convert cents to Decimal, divided by quantity for unit cost
+        # paid_amount_cents is TOTAL cents paid for the entire purchase
+        unit_cost = Decimal(purchase.paid_amount_cents) / Decimal(100) / Decimal(purchase.quantity)
+
+        # Get currency code
+        currency = self.CURRENCY_MAP.get(purchase.currencyid, "EUR")
+
+        # Create provenance
+        provenance = Provenance(
+            evidence_type=EvidenceType.STEAM_MARKET_HISTORY,
+            evidence_id=purchase.purchaseid,
+            evidence_data={
+                "listingid": purchase.listingid,
+                "paid_amount_cents": purchase.paid_amount_cents,
+                "currencyid": purchase.currencyid,
+                "timestamp_iso": datetime.fromtimestamp(
+                    purchase.time_event_unix, tz=timezone.utc
+                ).isoformat(),
+            },
+        )
+
+        # Record through canonical Phase 1 path
+        result = record_acquisition(
+            repository=self.repository,
+            bot_name=delta.bot_name,
+            market_hash_name=delta.market_hash_name,
+            quantity=delta.quantity_change,
+            acquired_at=self._unix_to_date(purchase.time_event_unix),
+            unit_cost=unit_cost,
+            currency=currency,
+            source_type=SourceType.STEAM_MARKET_PURCHASE,
+            provenance=provenance,
+            external_reference=purchase.external_ref,
+            entered_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        return AcquisitionResult(
+            bot_name=delta.bot_name,
+            market_hash_name=delta.market_hash_name,
+            quantity=delta.quantity_change,
+            cost_status=result.lot.cost_status,
+            source_type=result.lot.source_type,
+            provenance=result.lot.provenance,
+            created=result.created,
+            lot_id=result.lot.lot_id,
+            transaction_id=result.transaction.transaction_id if result.transaction else None,
+        )
+
+    def _record_unknown(
+        self,
+        delta: InventoryDelta,
+    ) -> AcquisitionResult:
+        """Record an UNKNOWN acquisition (no verified evidence).
+
+        Args:
+            delta: Inventory change observed.
+
+        Returns:
+            AcquisitionResult with UNKNOWN status.
+        """
+        # For UNKNOWN, we need a unique external_reference for idempotency.
+        # Use bot_name + market_hash_name + detected_at + quantity as a key.
+        external_ref = f"unknown:{delta.bot_name}:{delta.market_hash_name}:{delta.detected_at}:{delta.quantity_change}"
+        try:
+            result = record_acquisition(
+                repository=self.repository,
+                bot_name=delta.bot_name,
+                market_hash_name=delta.market_hash_name,
+                quantity=delta.quantity_change,
+                acquired_at=delta.detected_at,
+                unit_cost=None,  # UNKNOWN
+                currency=None,
+                source_type=None,
+                provenance=None,
+                external_reference=external_ref,
+                entered_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            return AcquisitionResult(
+                bot_name=delta.bot_name,
+                market_hash_name=delta.market_hash_name,
+                quantity=delta.quantity_change,
+                cost_status=result.lot.cost_status,
+                source_type=result.lot.source_type,
+                provenance=result.lot.provenance,
+                created=result.created,
+                lot_id=result.lot.lot_id,
+                transaction_id=result.transaction.transaction_id if result.transaction else None,
+            )
+
+        except AcquisitionError as exc:
+            return AcquisitionResult(
+                bot_name=delta.bot_name,
+                market_hash_name=delta.market_hash_name,
+                quantity=delta.quantity_change,
+                cost_status=CostStatus.UNKNOWN,
+                source_type=None,
+                provenance=None,
+                created=False,
+                lot_id=None,
+                transaction_id=None,
+                error=str(exc),
+            )
+
+    def _unix_to_date(self, unix_timestamp: int) -> date:
+        """Convert Unix timestamp to date."""
+        try:
+            return datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).date()
+        except (OSError, ValueError, OverflowError):
+            return date.today()
+
+    def _mark_snapshot_processed(self, snapshot_id: int) -> None:
+        """Mark a snapshot as processed in the database.
+
+        Creates the processing log table if it doesn't exist.
+        """
+        conn = self.repository.connection
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS acquisition_processing_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_name TEXT NOT NULL,
+                    snapshot_id INTEGER NOT NULL,
+                    processed_at TEXT NOT NULL,
+                    UNIQUE(bot_name, snapshot_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO acquisition_processing_log
+                    (bot_name, snapshot_id, processed_at)
+                VALUES (?, ?, ?)
+                """,
+                (self.bot_name, snapshot_id, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+        except Exception:
+            # Non-fatal — continue without logging
+            pass
+
+    def reconcile_delayed_evidence(
+        self,
+        session,
+        lookback_days: int = 30,
+    ) -> list[AcquisitionResult]:
+        """Reconcile existing UNKNOWN lots with later-found evidence.
+
+        Scans for UNKNOWN lots that now have matching Market History
+        purchases and creates new TRACKED lots alongside them (never
+        modifying the original UNKNOWN lot).
+
+        Args:
+            session: Authenticated Steam session.
+            lookback_days: How far back to look for evidence.
+
+        Returns:
+            List of new AcquisitionResult objects (TRACKED lots created).
+        """
+        results = []
+
+        # Find UNKNOWN lots without provenance
+        conn = self.repository.connection
+        unknown_lots = conn.execute(
+            """
+            SELECT al.id, al.market_hash_name, al.quantity, al.acquired_at,
+                   al.source_key
+            FROM acquisition_lots al
+            WHERE al.cost_status = 'UNKNOWN'
+              AND al.source_key IS NULL
+              AND al.bot_name = ?
+            ORDER BY al.acquired_at DESC
+            LIMIT 100
+            """,
+            (self.bot_name,),
+        ).fetchall()
+
+        for lot_row in unknown_lots:
+            lot_id, mhn, qty, acquired_at, _ = lot_row
+
+            try:
+                acquired_date = self._parse_date(acquired_at)
+                purchases = self.fetch_market_history_for_item(
+                    mhn,
+                    acquired_date,
+                    session,
+                )
+
+                # Create synthetic delta for matching
+                delta = InventoryDelta(
+                    bot_name=self.bot_name,
+                    market_hash_name=mhn,
+                    quantity_change=qty,
+                    previous_quantity=0,
+                    current_quantity=qty,
+                    detected_at=acquired_date,
+                )
+
+                matching = self.find_matching_purchase(delta, purchases)
+                if matching is not None:
+                    # Found evidence — create new TRACKED lot
+                    result = self._record_tracked(delta, matching)
+                    results.append(result)
+
+            except Exception:
+                # Skip lots we can't process
+                continue
+
+        return results
+
+
+__all__ = [
+    "AcquisitionDetector",
+    "AcquisitionDetectionError",
+    "AcquisitionResult",
+    "InventorySnapshot",
+    "InventoryDelta",
+    "MarketHistoryPurchase",
+]
