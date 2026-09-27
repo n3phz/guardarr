@@ -1,10 +1,10 @@
 # Guardarr
 
-<div align="center">
+<div align="center" markdown="1">
 
 ### Storage Admission & Protection for the *Arr ecosystem
 
-**Prevent concurrent automated media downloads from exceeding a defined storage budget.**
+**Prevent concurrent automated media downloads from exceeding your defined storage budget.**
 
 <p>
   <img src="assets/guardarr-brand.svg" alt="Guardarr visual identity and storage admission lifecycle" width="100%">
