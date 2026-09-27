@@ -277,20 +277,9 @@ class AcquisitionDetector:
             List of InventoryDelta objects for positive changes (acquisitions).
         """
         if previous is None:
-            # First snapshot — everything is new, but we can't determine if purchased
-            # Return as UNKNOWN candidates for later verification
-            deltas = []
-            for mhn, qty in current.items.items():
-                if qty > 0:
-                    deltas.append(InventoryDelta(
-                        bot_name=current.bot_name,
-                        market_hash_name=mhn,
-                        quantity_change=qty,
-                        previous_quantity=0,
-                        current_quantity=qty,
-                        detected_at=self._parse_date(current.captured_at),
-                    ))
-            return deltas
+            # First snapshot — establish baseline, do NOT create acquisition candidates.
+            # No previous inventory to compare against, so no delta can be computed.
+            return []
 
         deltas = []
         all_items = set(previous.items.keys()) | set(current.items.keys())
@@ -419,7 +408,7 @@ class AcquisitionDetector:
 
         Matching criteria:
         1. Same market_hash_name (already filtered)
-        2. Compatible quantity (purchase qty >= delta qty)
+        2. EXACT quantity match (purchase qty == delta qty)
         3. Within time window (already filtered)
         4. Unique match (no ambiguity)
 
@@ -430,12 +419,11 @@ class AcquisitionDetector:
         Returns:
             Best matching purchase or None if ambiguous/unmatched.
         """
-        # Filter to purchases that could explain this delta
-        # Must match: same item AND compatible quantity
+        # Filter to purchases with EXACT quantity match
         candidates = [
             p for p in purchases
             if p.market_hash_name == delta.market_hash_name
-            and p.quantity >= delta.quantity_change
+            and p.quantity == delta.quantity_change
         ]
 
         if len(candidates) == 0:
@@ -444,13 +432,7 @@ class AcquisitionDetector:
         if len(candidates) == 1:
             return candidates[0]
 
-        # Multiple candidates — check for unique best match
-        # Prefer exact quantity match first
-        exact_matches = [p for p in candidates if p.quantity == delta.quantity_change]
-        if len(exact_matches) == 1:
-            return exact_matches[0]
-
-        # If still ambiguous, return None (safer to mark UNKNOWN)
+        # Multiple exact quantity matches — ambiguous
         return None
 
     def detect_acquisition(
@@ -464,7 +446,7 @@ class AcquisitionDetector:
         2. Calculate deltas
         3. For each positive delta, query Market History
         4. Match purchase if found
-        5. Record TRACKED or UNKNOWN lot
+        5. Record TRACKED or UNKNOWN lot atomically with processed marker
 
         Args:
             session: Authenticated Steam session.
@@ -493,17 +475,34 @@ class AcquisitionDetector:
         # Calculate deltas
         deltas = self.calculate_deltas(previous, current)
 
-        # Process each positive delta
-        for delta in deltas:
-            if delta.quantity_change <= 0:
-                continue
+        # Filter to only positive deltas
+        positive_deltas = [d for d in deltas if d.quantity_change > 0]
+        if not positive_deltas:
+            # No acquisitions to record, but mark snapshot as processed
+            if process_new_snapshots:
+                self._mark_snapshot_processed_atomic(current.snapshot_id, [])
+            return results
 
-            result = self._process_delta(delta, session)
-            results.append(result)
+        # Process each positive delta within a single transaction
+        # that includes both acquisition persistence and processed marker
+        conn = self.repository.connection
+        try:
+            conn.execute("BEGIN")
 
-        # Mark snapshot as processed
-        if process_new_snapshots:
-            self._mark_snapshot_processed(current.snapshot_id)
+            for delta in positive_deltas:
+                result = self._process_delta(delta, session)
+                results.append(result)
+
+            # Mark snapshot as processed within the same transaction
+            if process_new_snapshots:
+                self._mark_snapshot_processed_atomic(current.snapshot_id, [])
+
+            conn.commit()
+
+        except Exception:
+            conn.rollback()
+            # Re-raise to surface the error
+            raise
 
         return results
 
@@ -520,51 +519,27 @@ class AcquisitionDetector:
 
         Returns:
             AcquisitionResult indicating outcome.
+
+        Raises:
+            Exception: Unexpected errors (Market History API failures, etc.)
+                are re-raised to trigger transaction rollback.
         """
-        try:
-            # Fetch Market History for this item
-            purchases = self.fetch_market_history_for_item(
-                delta.market_hash_name,
-                delta.detected_at,
-                session,
-            )
+        # Fetch Market History for this item
+        purchases = self.fetch_market_history_for_item(
+            delta.market_hash_name,
+            delta.detected_at,
+            session,
+        )
 
-            # Find matching purchase
-            matching_purchase = self.find_matching_purchase(delta, purchases)
+        # Find matching purchase
+        matching_purchase = self.find_matching_purchase(delta, purchases)
 
-            if matching_purchase is not None:
-                # Verified acquisition — create TRACKED lot
-                return self._record_tracked(delta, matching_purchase)
-            else:
-                # No verified evidence — create UNKNOWN lot
-                return self._record_unknown(delta)
-
-        except AcquisitionError as exc:
-            return AcquisitionResult(
-                bot_name=delta.bot_name,
-                market_hash_name=delta.market_hash_name,
-                quantity=delta.quantity_change,
-                cost_status=CostStatus.UNKNOWN,
-                source_type=None,
-                provenance=None,
-                created=False,
-                lot_id=None,
-                transaction_id=None,
-                error=str(exc),
-            )
-        except Exception as exc:
-            return AcquisitionResult(
-                bot_name=delta.bot_name,
-                market_hash_name=delta.market_hash_name,
-                quantity=delta.quantity_change,
-                cost_status=CostStatus.UNKNOWN,
-                source_type=None,
-                provenance=None,
-                created=False,
-                lot_id=None,
-                transaction_id=None,
-                error=f"detection_error: {exc}",
-            )
+        if matching_purchase is not None:
+            # Verified acquisition — create TRACKED lot
+            return self._record_tracked(delta, matching_purchase)
+        else:
+            # No verified evidence — create UNKNOWN lot
+            return self._record_unknown(delta)
 
     def _record_tracked(
         self,
@@ -579,9 +554,24 @@ class AcquisitionDetector:
 
         Returns:
             AcquisitionResult with TRACKED status.
+
+        Note on paid_amount interpretation:
+        Steam Market History 'paid_amount' for BUY events represents the
+        TOTAL amount the buyer paid (including Steam fees + publisher fees).
+        This is the correct acquisition cost.
+        
+        For a BUY event:
+          paid_amount = buyer's total spend (what we paid)
+          received_amount = seller's net (after fees)
+          steam_fee + publisher_fee = fees taken by Steam/publisher
+          paid_amount = received_amount + steam_fee + publisher_fee
+        
+        Since we are the buyer, paid_amount is our acquisition cost.
+        No fee subtraction is needed or correct.
         """
         # Convert cents to Decimal, divided by quantity for unit cost
         # paid_amount_cents is TOTAL cents paid for the entire purchase
+        # (includes all fees - this is the buyer's actual cost)
         unit_cost = Decimal(purchase.paid_amount_cents) / Decimal(100) / Decimal(purchase.quantity)
 
         # Get currency code
@@ -691,36 +681,33 @@ class AcquisitionDetector:
         except (OSError, ValueError, OverflowError):
             return date.today()
 
-    def _mark_snapshot_processed(self, snapshot_id: int) -> None:
-        """Mark a snapshot as processed in the database.
+    def _mark_snapshot_processed_atomic(self, snapshot_id: int, _unused=None) -> None:
+        """Mark a snapshot as processed within the caller's transaction.
 
         Creates the processing log table if it doesn't exist.
+        Does NOT commit or rollback — caller manages the transaction.
         """
         conn = self.repository.connection
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS acquisition_processing_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    bot_name TEXT NOT NULL,
-                    snapshot_id INTEGER NOT NULL,
-                    processed_at TEXT NOT NULL,
-                    UNIQUE(bot_name, snapshot_id)
-                )
-                """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS acquisition_processing_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_name TEXT NOT NULL,
+                snapshot_id INTEGER NOT NULL,
+                processed_at TEXT NOT NULL,
+                UNIQUE(bot_name, snapshot_id)
             )
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO acquisition_processing_log
-                    (bot_name, snapshot_id, processed_at)
-                VALUES (?, ?, ?)
-                """,
-                (self.bot_name, snapshot_id, datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
-        except Exception:
-            # Non-fatal — continue without logging
-            pass
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO acquisition_processing_log
+                (bot_name, snapshot_id, processed_at)
+            VALUES (?, ?, ?)
+            """,
+            (self.bot_name, snapshot_id, datetime.now(timezone.utc).isoformat()),
+        )
+        # NO commit — caller manages transaction
 
     def reconcile_delayed_evidence(
         self,

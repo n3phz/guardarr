@@ -170,78 +170,71 @@ class Repository:
         """Insert transaction and acquisition lot atomically.
 
         Returns (transaction_id, lot_id).
+        Caller is responsible for transaction management (BEGIN/COMMIT/ROLLBACK).
         """
-        try:
-            self.connection.execute("BEGIN")
-
-            cursor = self.connection.execute(
-                """
-                INSERT INTO transactions (
-                    type,
-                    market_hash_name,
-                    quantity,
-                    unit_price,
-                    fees,
-                    total_value,
-                    timestamp,
-                    bot_name,
-                    external_ref
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    transaction.type.value,
-                    transaction.market_hash_name,
-                    transaction.quantity,
-                    str(transaction.unit_price),
-                    str(transaction.fees),
-                    str(transaction.total_value),
-                    transaction.timestamp,
-                    transaction.bot_name,
-                    transaction.external_ref,
-                ),
+        cursor = self.connection.execute(
+            """
+            INSERT INTO transactions (
+                type,
+                market_hash_name,
+                quantity,
+                unit_price,
+                fees,
+                total_value,
+                timestamp,
+                bot_name,
+                external_ref
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                transaction.type.value,
+                transaction.market_hash_name,
+                transaction.quantity,
+                str(transaction.unit_price),
+                str(transaction.fees),
+                str(transaction.total_value),
+                transaction.timestamp,
+                transaction.bot_name,
+                transaction.external_ref,
+            ),
+        )
 
-            transaction_id = cursor.lastrowid
-            if transaction_id is None:
-                raise AcquisitionError("failed to obtain transaction id")
+        transaction_id = cursor.lastrowid
+        if transaction_id is None:
+            raise AcquisitionError("failed to obtain transaction id")
 
-            cursor = self.connection.execute(
-                """
-                INSERT INTO acquisition_lots (
-                    source_transaction_id,
-                    market_hash_name,
-                    bot_name,
-                    original_quantity,
-                    remaining_quantity,
-                    unit_cost,
-                    acquired_at,
-                    cost_status
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    transaction_id,
-                    transaction.market_hash_name,
-                    transaction.bot_name,
-                    transaction.quantity,
-                    transaction.quantity,
-                    str(unit_cost) if unit_cost is not None else None,
-                    acquired_at,
-                    cost_status.value,
-                ),
+        cursor = self.connection.execute(
+            """
+            INSERT INTO acquisition_lots (
+                source_transaction_id,
+                market_hash_name,
+                bot_name,
+                original_quantity,
+                remaining_quantity,
+                unit_cost,
+                acquired_at,
+                cost_status
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                transaction_id,
+                transaction.market_hash_name,
+                transaction.bot_name,
+                transaction.quantity,
+                transaction.quantity,
+                str(unit_cost) if unit_cost is not None else None,
+                acquired_at,
+                cost_status.value,
+            ),
+        )
 
-            lot_id = cursor.lastrowid
-            if lot_id is None:
-                raise AcquisitionError("failed to obtain acquisition lot id")
+        lot_id = cursor.lastrowid
+        if lot_id is None:
+            raise AcquisitionError("failed to obtain acquisition lot id")
 
-            self.connection.commit()
-            return transaction_id, lot_id
-
-        except Exception:
-            self.connection.rollback()
-            raise
+        return transaction_id, lot_id
 
 
 def record_acquisition(
@@ -348,7 +341,7 @@ def record_acquisition(
 
     cost_status = CostStatus.TRACKED if is_tracked else CostStatus.UNKNOWN
 
-    # Insert transaction and lot atomically
+    # Insert transaction and lot within caller's transaction
     transaction_id, lot_id = repository.insert_transaction_and_lot(
         transaction=transaction,
         unit_cost=unit_cost,
