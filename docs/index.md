@@ -150,7 +150,7 @@ flowchart LR
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[View on GitHub](https://github.com/n3phz/guardarr) · [Docker Image](https://ghcr.io/n3phz/guardarr) · [Report Issue](https://github.com/n3phz/guardarr/issues)**
 
