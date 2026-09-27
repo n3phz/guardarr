@@ -1,0 +1,114 @@
+site_name: Guardarr
+site_description: Storage Admission & Protection for the Arr Ecosystem
+site_url: https://github.com/n3phz/guardarr
+repo_url: https://github.com/n3phz/guardarr
+repo_name: n3phz/guardarr
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/guardarr-brand.svg
+  favicon: assets/guardarr-brand.svg
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: cyan
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/n3phz/guardarr
+    - icon: fontawesome/brands/docker
+      link: https://ghcr.io/n3phz/guardarr
+
+nav:
+  - Home: index.md
+  - Problem:
+      - The Storage Problem: problem/storage-problem.md
+      - How Guardarr Helps: problem/how-guardarr-helps.md
+  - How It Works:
+      - Workflow Overview: how-it-works/workflow.md
+      - Reservation Lifecycle: how-it-works/lifecycle.md
+      - Safety Model: how-it-works/safety.md
+  - Integrations:
+      - Overview: integrations/overview.md
+      - Seerr & Jellyseerr: integrations/seerr.md
+      - Sonarr & Radarr: integrations/arr.md
+      - qBittorrent: integrations/qbittorrent.md
+  - Storage Safety:
+      - Thresholds: storage/thresholds.md
+      - Admission Logic: storage/admission.md
+      - Reconciliation: storage/reconciliation.md
+  - Deployment:
+      - Quick Start (Docker): deployment/docker.md
+      - Saltbox: deployment/saltbox.md
+      - Configuration: deployment/configuration.md
+      - Security: deployment/security.md
+  - Verification:
+      - Health Checks: verification/health.md
+      - Integration Tests: verification/integrations.md
+  - Troubleshooting:
+      - Common Issues: troubleshooting/common.md
+      - Database: troubleshooting/database.md
+      - Storage: troubleshooting/storage.md
+      - qBittorrent: troubleshooting/qbittorrent.md
+      - Integrations: troubleshooting/integrations.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - API Reference: architecture/api.md
+      - Database: architecture/database.md
+      - Services: architecture/services.md
+  - Roadmap: roadmap.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - admonition
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - git-revision-date-localized:
+      type: date
+      timezone: UTC
+
+copyright: |
+  &copy; 2026 Guardarr contributors. MIT License.
