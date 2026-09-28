@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 
 from app.api.arr import router as arr_router
 from app.api.audit import router as audit_router
@@ -52,15 +54,24 @@ def create_application() -> FastAPI:
     app.include_router(audit_router)
     app.include_router(integrations_router)
 
-    # SPA catch-all: serve index.html for non-API routes
-    # Must be added AFTER all API routers so /api/* takes precedence
+    # Serve static assets from Vite build (hashed filenames)
+    # Must be mounted BEFORE the SPA catch-all route
+    webui_dist = Path(__file__).parent.parent / "webui" / "dist"
+    assets_dir = webui_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    # SPA catch-all: serve index.html for non-API, non-asset routes
+    # Must be added AFTER all API routers and static mounts so /api/* and /assets/* take precedence
     @app.get("/{full_path:path}")
     async def spa_catch_all(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
+        if full_path.startswith("assets/"):
+            raise HTTPException(status_code=404, detail="Asset not found")
         # Serve built frontend from /app/webui/dist
-        index_path = os.path.join(os.path.dirname(__file__), "..", "webui", "dist", "index.html")
-        if os.path.exists(index_path):
+        index_path = webui_dist / "index.html"
+        if index_path.exists():
             return FileResponse(index_path)
         raise HTTPException(status_code=404, detail="Frontend not built")
 
