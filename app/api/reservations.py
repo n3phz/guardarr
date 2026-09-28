@@ -12,6 +12,10 @@ from app.schemas.reservation import (
     ReleaseRequest,
     ReconcileResponse,
 )
+from app.db.models import ReconcileStateModel
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel
 from app.services.admission import AdmissionService
 from app.services.reconciliation import ReconciliationService
 
@@ -70,6 +74,24 @@ def get_reservation(reservation_id: str, db: Session = Depends(get_db)):
     if not reservation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
     return reservation
+
+
+class ReconcileStateResponse(BaseModel):
+    component: str
+    last_run_at: Optional[datetime]
+    status: Optional[str]
+    details: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/reconcile/state", response_model=ReconcileStateResponse)
+def get_reconcile_state(db: Session = Depends(get_db)):
+    rec_state = db.query(ReconcileStateModel).filter(ReconcileStateModel.component == "reservations").first()
+    if not rec_state:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No reconciliation state found")
+    return rec_state
 
 
 @router.post("/reconcile", response_model=ReconcileResponse)

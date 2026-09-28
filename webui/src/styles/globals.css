@@ -1,0 +1,165 @@
+@charset "UTF-8";
+
+:root {
+  color-scheme: dark;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body {
+  min-height: 100vh;
+  font-family: var(--font-ui, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  font-size: var(--font-size-md, 0.875rem);
+  line-height: 1.5;
+  color: var(--text-primary, #dce8f5);
+  background: var(--bg-deep, #050b16);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: var(--cyan, #22d3ee);
+  text-decoration: none;
+  transition: color var(--transition-fast, 125ms ease);
+}
+
+a:hover {
+  color: var(--cyan-bright, #20bfff);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--cyan, #22d3ee);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+code, kbd, pre, samp {
+  font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
+  font-size: 0.85em;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.3);
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-deep, #050b16);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-card-border, #1a2a44);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted, #668099);
+}
+
+:root {
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+  --font-size-xs: 0.6875rem;
+  --font-size-sm: 0.75rem;
+  --font-size-md: 0.875rem;
+  --font-size-lg: 1rem;
+  --font-size-xl: 1.125rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 2rem;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --border-radius-sm: 4px;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+  --border-radius-xl: 20px;
+  --transition-fast: 125ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+  --bg-deep: #050b16;
+  --bg-panel: #0b1424;
+  --bg-panel-hover: #0c1a2d;
+  --bg-card: #0c1a2d;
+  --bg-card-border: #1a2a44;
+  --text-primary: #dce8f5;
+  --text-secondary: #8fa4ba;
+  --text-muted: #668099;
+  --text-dim: #4a5a7a;
+  --cyan: #22d3ee;
+  --cyan-bright: #20bfff;
+  --cyan-dim: #0b5cff;
+  --blue: #1d8cff;
+  --blue-dim: #0b5cff;
+  --gold: #f59e0b;
+  --gold-bright: #fbbf24;
+  --green: #34d399;
+  --green-bright: #22c55e;
+  --red: #ef4444;
+  --red-bright: #f87171;
+  --state-normal: #34d399;
+  --state-warning: #f59e0b;
+  --state-blocked: #ef4444;
+  --state-emergency: #f97316;
+  --state-critical: #dc2626;
+  --status-connected: #34d399;
+  --status-degraded: #f59e0b;
+  --status-offline: #ef4444;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(34, 211, 238, 0.15);
+  --z-header: 100;
+  --z-sidebar: 200;
+  --z-modal: 300;
+  --z-tooltip: 400;
+}

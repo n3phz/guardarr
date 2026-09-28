@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.api.arr import router as arr_router
+from app.api.audit import router as audit_router
 from app.api.controlled_add import router as controlled_add_router
 from app.api.health import router as health_router
+from app.api.integrations import router as integrations_router
 from app.api.qbittorrent import router as qbittorrent_router
 from app.api.ready import router as ready_router
 from app.api.reservations import router as reservations_router
@@ -13,6 +15,8 @@ from app.api.seerr import router as seerr_router
 from app.api.status import router as status_router
 from app.core.config import get_settings
 from app.db.base import Base, engine
+from fastapi.responses import FileResponse
+import os
 
 if TYPE_CHECKING:
     from app.db import Base  # noqa: F401
@@ -45,6 +49,21 @@ def create_application() -> FastAPI:
     app.include_router(controlled_add_router)
     app.include_router(arr_router)
     app.include_router(seerr_router)
+    app.include_router(audit_router)
+    app.include_router(integrations_router)
+
+    # SPA catch-all: serve index.html for non-API routes
+    # Must be added AFTER all API routers so /api/* takes precedence
+    @app.get("/{full_path:path}")
+    async def spa_catch_all(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+        # Serve built frontend from /app/webui/dist
+        index_path = os.path.join(os.path.dirname(__file__), "..", "webui", "dist", "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        raise HTTPException(status_code=404, detail="Frontend not built")
+
     return app
 
 

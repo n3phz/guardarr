@@ -1,3 +1,11 @@
+FROM node:22-slim AS frontend-build
+
+WORKDIR /webui
+COPY webui/package.json webui/package-lock.json ./
+RUN npm ci
+COPY webui/ ./
+RUN npm run build
+
 FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -19,6 +27,8 @@ COPY README.md ./
 COPY app ./app
 
 RUN pip install --no-cache-dir -e .
+
+COPY --from=frontend-build /webui/dist ./webui/dist
 
 RUN mkdir -p /config /data && chown -R guardarr:guardarr /app /config /data
 
