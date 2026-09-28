@@ -1,0 +1,11 @@
+# SQLite databases
+*.db
+*.sqlite
+
+# Migration staging copies
+staging-tradebot.db
+staging-tradebot-v2.db
+
+# PyCache
+**/__pycache__/
+**/*.pyc

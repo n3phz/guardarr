@@ -140,7 +140,8 @@ def run_test(name, test_func):
 
 # --- Tests ---
 
-def test_initial_snapshot_creates_unknown():
+def test_initial_snapshot_creates_no_acquisitions():
+    """Initial snapshot establishes baseline only — no acquisition lots created."""
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     create_full_schema(conn)
@@ -156,17 +157,12 @@ def test_initial_snapshot_creates_unknown():
     detector.fetch_market_history_for_item = Mock(return_value=[])
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
-    assert len(results) == 2
-    for r in results:
-        assert r.cost_status == CostStatus.UNKNOWN
-        assert r.created == True
-        assert r.lot_id is not None
-        assert r.error is None
-
+    # Baseline only: no acquisition candidates detected
+    assert len(results) == 0
     lot_count = conn.execute(
-        "SELECT COUNT(*) FROM acquisition_lots WHERE cost_status = 'UNKNOWN'"
+        "SELECT COUNT(*) FROM acquisition_lots"
     ).fetchone()[0]
-    assert lot_count == 2
+    assert lot_count == 0
 
 
 def test_new_item_on_subsequent_snapshot():
@@ -336,11 +332,13 @@ def test_market_history_partial_match_creates_tracked():
     assert Decimal(lot[0]) == Decimal("50.00")
 
 
-def test_no_market_history_match_creates_unknown():
+def test_initial_snapshot_baseline_no_acquisitions():
+    """Second snapshot with no previous snapshot creates zero acquisitions."""
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     create_full_schema(conn)
     repo = Repository(conn)
+    detector = AcquisitionDetector(repo, "Rixqor")
     mock_session = Mock()
 
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
@@ -348,12 +346,15 @@ def test_no_market_history_match_creates_unknown():
         {"market_hash_name": "Mystery Card", "amount": 1},
     ])
 
-    detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
-    assert len(results) == 1
-    assert results[0].cost_status == CostStatus.UNKNOWN
+    # No previous snapshot = baseline; new items without Market History = 0 acquisitions
+    assert len(results) == 0
+    lot_count = conn.execute(
+        "SELECT COUNT(*) FROM acquisition_lots"
+    ).fetchone()[0]
+    assert lot_count == 0
 
 
 def test_repeated_polling_no_duplicate_tracked():
@@ -921,14 +922,14 @@ def test_unknown_external_ref_distinct():
 
 if __name__ == "__main__":
     tests = [
-        ("Initial snapshot creates UNKNOWN", test_initial_snapshot_creates_unknown),
+        ("Initial snapshot creates no acquisitions", test_initial_snapshot_creates_no_acquisitions),
         ("New item on subsequent snapshot", test_new_item_on_subsequent_snapshot),
         ("Quantity increase detected", test_quantity_increase_detected),
         ("Quantity decrease no acquisition", test_quantity_decrease_no_acquisition),
         ("No inventory change no acquisition", test_no_inventory_change_no_acquisition),
         ("Market History exact match creates TRACKED", test_market_history_exact_match_creates_tracked),
         ("Market History partial match creates TRACKED", test_market_history_partial_match_creates_tracked),
-        ("No Market History match creates UNKNOWN", test_no_market_history_match_creates_unknown),
+        ("Initial snapshot baseline no acquisitions", test_initial_snapshot_baseline_no_acquisitions),
         ("Repeated polling no duplicate TRACKED", test_repeated_polling_no_duplicate_tracked),
         ("Repeated UNKNOWN remain distinct", test_repeated_unknown_remain_distinct),
         ("Verified acquisition cost in ledger", test_verified_acquisition_cost_in_ledger),
