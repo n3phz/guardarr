@@ -29,6 +29,52 @@ guardarr_role_paths_folders_list:
 guardarr_storage_path: "/mnt/unionfs"
 
 ################################
+# Web / Traefik
+################################
+
+guardarr_role_web_subdomain: "{{ guardarr_name }}"
+guardarr_role_web_domain: "{{ user.domain }}"
+guardarr_role_web_port: "8000"
+guardarr_role_web_url: "{{ lookup('role_web', role='guardarr', scheme='https') }}"
+
+################################
+# DNS
+################################
+
+guardarr_role_dns_record: "{{ lookup('role_var', '_web_subdomain', role='guardarr') }}"
+guardarr_role_dns_zone: "{{ lookup('role_var', '_web_domain', role='guardarr') }}"
+guardarr_role_dns_proxy: "{{ dns_proxied }}"
+
+################################
+# Traefik
+################################
+
+guardarr_role_traefik_enabled: true
+guardarr_role_traefik_api_enabled: true
+# API endpoints that should bypass Authelia (for SPA API calls)
+guardarr_role_traefik_api_endpoint: "PathPrefix(`/api`)"
+
+guardarr_role_traefik_sso_middleware: "{{ traefik_default_sso_middleware }}"
+guardarr_role_traefik_middleware_default: "{{ traefik_default_middleware
+                                            + (',themepark-' + guardarr_name
+                                               if (lookup('role_var', '_themepark_enabled', role='guardarr') and global_themepark_plugin_enabled)
+                                               else '') }}"
+guardarr_role_traefik_middleware_custom: ""
+guardarr_role_traefik_middleware_default_api: "{{ traefik_default_middleware_api }}"
+guardarr_role_traefik_middleware_custom_api: ""
+guardarr_role_traefik_certresolver: "{{ traefik_default_certresolver }}"
+
+################################
+# Theme
+################################
+
+guardarr_role_themepark_enabled: false
+guardarr_role_themepark_app: "guardarr"
+guardarr_role_themepark_theme: "{{ global_themepark_theme }}"
+guardarr_role_themepark_domain: "{{ global_themepark_domain }}"
+guardarr_role_themepark_addons: []
+
+################################
 # Docker
 ################################
 
@@ -39,7 +85,7 @@ guardarr_role_docker_container: "{{ guardarr_name }}"
 guardarr_role_docker_image_pull: true
 guardarr_role_docker_image_repo: "ghcr.io/n3phz/guardarr"
 # Published immutable version tag (ghcr.io/n3phz/guardarr:0.1.1 verified 2026-09-26).
-guardarr_role_docker_image_tag: "0.1.1"
+guardarr_role_docker_image_tag: "0.1.2"
 guardarr_role_docker_image: "{{ lookup('role_var', '_docker_image_repo', role='guardarr') }}:{{ lookup('role_var', '_docker_image_tag', role='guardarr') }}"
 
 # Envs
@@ -92,4 +138,48 @@ guardarr_role_docker_healthcheck:
 guardarr_role_docker_labels_default: {}
 guardarr_role_docker_labels_custom: {}
 guardarr_role_docker_labels: "{{ lookup('role_var', '_docker_labels_default', role='guardarr')
-                                 | combine(lookup('role_var', '_docker_labels_custom', role='guardarr')) }}"
+                                 | combine((traefik_themepark_labels
+                                          if (lookup('role_var', '_themepark_enabled', role='guardarr') and global_themepark_plugin_enabled)
+                                          else {}),
+                                         lookup('role_var', '_docker_labels_custom', role='guardarr')) }}"
+
+################################
+# Traefik Labels
+################################
+
+guardarr_role_docker_labels_traefik_default: |
+  traefik.enable=true
+  traefik.http.routers.{{ guardarr_name }}-http.entrypoints={{ traefik_entrypoint_web }}
+  traefik.http.routers.{{ guardarr_name }}-http.service={{ guardarr_name }}-http
+  traefik.http.routers.{{ guardarr_name }}-http.rule={{ traefik_host_template }}
+  traefik.http.routers.{{ guardarr_name }}-http.priority=20
+  traefik.http.routers.{{ guardarr_name }}-http.middlewares={{ lookup("role_var", "_traefik_middleware_http", role="guardarr", default=traefik_default_middleware_http) }}
+  traefik.http.routers.{{ guardarr_name }}.entrypoints={{ traefik_entrypoint_websecure }}
+  traefik.http.routers.{{ guardarr_name }}.service={{ guardarr_name }}
+  traefik.http.routers.{{ guardarr_name }}.rule={{ traefik_host_template }}
+  traefik.http.routers.{{ guardarr_name }}.priority=20
+  traefik.http.routers.{{ guardarr_name }}.tls.certresolver={{ traefik_router_certresolver }}
+  traefik.http.routers.{{ guardarr_name }}.tls.options=securetls@file
+  traefik.http.routers.{{ guardarr_name }}.middlewares={{ traefik_middleware }}
+  traefik.http.services.{{ guardarr_name }}-http.loadbalancer.server.port={{ lookup("role_var", "_web_http_port", role="guardarr", default=traefik_loadbalancer_port) }}
+  traefik.http.services.{{ guardarr_name }}-http.loadbalancer.server.scheme={{ lookup("role_var", "_web_http_scheme", role="guardarr", default=traefik_loadbalancer_scheme) }}
+  traefik.http.services.{{ guardarr_name }}.loadbalancer.server.port={{ traefik_loadbalancer_port }}
+  traefik.http.services.{{ guardarr_name }}.loadbalancer.server.scheme={{ traefik_loadbalancer_scheme }}
+
+guardarr_role_docker_labels_traefik_api: |
+  traefik.http.routers.{{ guardarr_name }}-api-http.entrypoints={{ traefik_entrypoint_web }}
+  traefik.http.routers.{{ guardarr_name }}-api-http.service={{ guardarr_name }}-api-http
+  traefik.http.routers.{{ guardarr_name }}-api-http.rule={{ traefik_host_template }} && ({{ lookup("role_var", "_traefik_api_endpoint", role="guardarr", default=omit) }})
+  traefik.http.routers.{{ guardarr_name }}-api-http.priority=30
+  traefik.http.routers.{{ guardarr_name }}-api-http.middlewares={{ lookup("role_var", "_traefik_api_middleware_http", role="guardarr", default=traefik_default_middleware_http_api) }}
+  traefik.http.routers.{{ guardarr_name }}-api.entrypoints={{ traefik_entrypoint_websecure }}
+  traefik.http.routers.{{ guardarr_name }}-api.service={{ guardarr_name }}-api
+  traefik.http.routers.{{ guardarr_name }}-api.rule={{ traefik_host_template }} && ({{ lookup("role_var", "_traefik_api_endpoint", role="guardarr", default=omit) }})
+  traefik.http.routers.{{ guardarr_name }}-api.priority=30
+  traefik.http.routers.{{ guardarr_name }}-api.tls.certresolver={{ traefik_router_certresolver }}
+  traefik.http.routers.{{ guardarr_name }}-api.tls.options=securetls@file
+  traefik.http.routers.{{ guardarr_name }}-api.middlewares={{ traefik_middleware_api }}
+  traefik.http.services.{{ guardarr_name }}-api-http.loadbalancer.server.port={{ lookup("role_var", "_web_api_http_port", role="guardarr", default=lookup("role_var", "_web_api_port", role="guardarr", default=traefik_loadbalancer_port)) }}
+  traefik.http.services.{{ guardarr_name }}-api-http.loadbalancer.server.scheme={{ lookup("role_var", "_web_api_http_scheme", role="guardarr", default=lookup("role_var", "_web_api_scheme", role="guardarr", default=traefik_loadbalancer_scheme)) }}
+  traefik.http.services.{{ guardarr_name }}-api.loadbalancer.server.port={{ lookup("role_var", "_web_api_port", role="guardarr", default=traefik_loadbalancer_port) }}
+  traefik.http.services.{{ guardarr_name }}-api.loadbalancer.server.scheme={{ lookup("role_var", "_web_api_scheme", role="guardarr", default=traefik_loadbalancer_scheme) }}
