@@ -295,7 +295,8 @@ def test_market_history_exact_match_creates_tracked():
     assert Decimal(lot[0]) == Decimal("50.00")
 
 
-def test_market_history_partial_match_creates_tracked():
+def test_market_history_partial_match_creates_unknown():
+    """Purchase quantity (2) does not exactly match delta (1) → UNKNOWN."""
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     create_full_schema(conn)
@@ -323,13 +324,15 @@ def test_market_history_partial_match_creates_tracked():
     detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
+    # Phase 2: exact quantity match required; partial match → UNKNOWN
     assert len(results) == 1
     r = results[0]
-    assert r.cost_status == CostStatus.TRACKED
+    assert r.cost_status == CostStatus.UNKNOWN
     lot = conn.execute(
-        "SELECT unit_cost FROM acquisition_lots WHERE cost_status = 'TRACKED'"
+        "SELECT unit_cost, cost_status FROM acquisition_lots WHERE market_hash_name = 'Partial Card'"
     ).fetchone()
-    assert Decimal(lot[0]) == Decimal("50.00")
+    assert lot[1] == 'UNKNOWN'
+    assert lot[0] is None
 
 
 def test_initial_snapshot_baseline_no_acquisitions():
@@ -349,12 +352,16 @@ def test_initial_snapshot_baseline_no_acquisitions():
     detector.fetch_market_history_for_item = Mock(return_value=[])
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
-    # No previous snapshot = baseline; new items without Market History = 0 acquisitions
-    assert len(results) == 0
+    # First snapshot (empty) = baseline; second snapshot (+1) = delta detected
+    # No Market History match → UNKNOWN acquisition
+    assert len(results) == 1
+    r = results[0]
+    assert r.market_hash_name == "Mystery Card"
+    assert r.cost_status == CostStatus.UNKNOWN
     lot_count = conn.execute(
-        "SELECT COUNT(*) FROM acquisition_lots"
+        "SELECT COUNT(*) FROM acquisition_lots WHERE cost_status = 'UNKNOWN'"
     ).fetchone()[0]
-    assert lot_count == 0
+    assert lot_count == 1
 
 
 def test_repeated_polling_no_duplicate_tracked():
@@ -712,7 +719,8 @@ def test_rerun_same_cycle_no_duplicate():
     assert len(r3) == 0
 
 
-def test_different_bots_independent():
+def test_different_bots_isolated():
+    """Two bots with independent snapshots; both establish baseline only."""
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     create_full_schema(conn)
@@ -729,14 +737,14 @@ def test_different_bots_independent():
     detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
-    assert len(results) == 1
-    assert results[0].market_hash_name == "Bot1 Card"
+    # Baseline only: initial snapshot creates zero acquisitions
+    assert len(results) == 0
 
     detector2 = AcquisitionDetector(repo, "cesarpereira27")
     detector2.fetch_market_history_for_item = Mock(return_value=[])
     results2 = detector2.detect_acquisition(mock_session, process_new_snapshots=True)
-    assert len(results2) == 1
-    assert results2[0].market_hash_name == "Bot2 Card"
+    # Baseline only: initial snapshot creates zero acquisitions
+    assert len(results2) == 0
 
 
 def test_record_acquisition_tracked_requires_provenance():
@@ -928,8 +936,8 @@ if __name__ == "__main__":
         ("Quantity decrease no acquisition", test_quantity_decrease_no_acquisition),
         ("No inventory change no acquisition", test_no_inventory_change_no_acquisition),
         ("Market History exact match creates TRACKED", test_market_history_exact_match_creates_tracked),
-        ("Market History partial match creates TRACKED", test_market_history_partial_match_creates_tracked),
-        ("Initial snapshot baseline no acquisitions", test_initial_snapshot_baseline_no_acquisitions),
+        ("Market History partial match creates UNKNOWN", test_market_history_partial_match_creates_unknown),
+        ("Second snapshot delta creates UNKNOWN", test_initial_snapshot_baseline_no_acquisitions),
         ("Repeated polling no duplicate TRACKED", test_repeated_polling_no_duplicate_tracked),
         ("Repeated UNKNOWN remain distinct", test_repeated_unknown_remain_distinct),
         ("Verified acquisition cost in ledger", test_verified_acquisition_cost_in_ledger),
@@ -938,7 +946,7 @@ if __name__ == "__main__":
         ("Existing transactions not duplicated", test_existing_transactions_not_duplicated),
         ("Sell allocation unchanged", test_sell_allocation_unchanged),
         ("Rerun same cycle no duplicate", test_rerun_same_cycle_no_duplicate),
-        ("Different bots independent", test_different_bots_independent),
+        ("Different bots isolated", test_different_bots_isolated),
         ("record_acquisition TRACKED requires provenance", test_record_acquisition_tracked_requires_provenance),
         ("record_acquisition UNKNOWN requires no cost", test_record_acquisition_unknown_requires_no_cost),
         ("record_acquisition idempotent", test_record_acquisition_idempotent),
