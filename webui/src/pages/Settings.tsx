@@ -180,7 +180,7 @@ export function Settings() {
         <div className="settings-grid">
           <SettingItem
             label="API Version"
-            value="0.1.2"
+            value="0.1.4"
             description="Guardarr API version"
             mono
           />

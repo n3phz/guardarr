@@ -98,7 +98,7 @@ export function Sidebar() {
 
       <div className="sidebar-footer">
         <div className="version-info">
-          <span className="version-label">v0.1.2</span>
+          <span className="version-label">v0.1.4</span>
           <span className="version-status">alpha</span>
         </div>
       </div>

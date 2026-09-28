@@ -13,7 +13,7 @@ def health_check() -> JSONResponse:
         content={
             "status": "ok",
             "service": "guardarr",
-            "version": "0.1.0",
+            "version": "0.1.4",
             "environment": settings.environment if hasattr(settings, 'environment') else "development",
         },
         status_code=200,

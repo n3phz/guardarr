@@ -39,7 +39,7 @@ def create_application() -> FastAPI:
     app = FastAPI(
         title="Guardarr",
         description="Storage admission and protection across the Arr ecosystem",
-        version="0.1.2",
+        version="0.1.4",
         lifespan=lifespan,
     )
     app.state.settings = settings
