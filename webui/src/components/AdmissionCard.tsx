@@ -6,9 +6,10 @@ interface AdmissionCardProps {
   estimate: EstimateResponse | null
   loading: boolean
   onEstimate: (req: EstimateRequest) => void
+  onClear?: () => void
 }
 
-export function AdmissionCard({ estimate, loading, onEstimate }: AdmissionCardProps) {
+export function AdmissionCard({ estimate, loading, onEstimate, onClear }: AdmissionCardProps) {
   const [maxBytes, setMaxBytes] = useState('300')
   const [expectedBytes, setExpectedBytes] = useState('280')
   const [unit, setUnit] = useState<'GB' | 'TB'>('GB')
@@ -139,14 +140,14 @@ export function AdmissionCard({ estimate, loading, onEstimate }: AdmissionCardPr
         )}
 
         <div className="admission-actions">
+          <div className="btn btn-secondary" style={{ opacity: !admissible ? 0.5 : 1, cursor: !admissible ? 'not-allowed' : 'default' }}>
+            Create Reservation (via API/Arr)
+          </div>
           <button
-            className="btn btn-secondary"
-            onClick={() => {}}
+            className="btn btn-ghost"
+            onClick={onClear}
             disabled={!admissible}
           >
-            Create Reservation
-          </button>
-          <button className="btn btn-ghost" onClick={() => {}}>
             Adjust Request
           </button>
         </div>

@@ -84,6 +84,8 @@ export interface ReservationResponse {
   created_at: string
   updated_at: string
   expires_at: string | null
+  arr_item_id: string | null
+  associated_path: string | null
 }
 
 export type ReservationState =

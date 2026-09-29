@@ -111,6 +111,7 @@ export function Dashboard() {
             estimate={estimate}
             loading={estimateLoading}
             onEstimate={handleEstimate}
+            onClear={() => setEstimate(null)}
           />
         </section>
       </div>
