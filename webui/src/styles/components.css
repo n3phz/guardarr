@@ -4,7 +4,7 @@
 
 /* App Layout */
 .app {
-  min-height: 100vh;
+  min-height: auto;
   display: flex;
   flex-direction: column;
 }
@@ -271,7 +271,7 @@
 }
 
 .inodes-fill {
-  height: 100%;
+  height: auto;
   border-radius: 3px;
   transition: width var(--transition-normal), background var(--transition-fast);
 }
@@ -1266,6 +1266,14 @@
   .mobile-menu-btn {
     display: none !important;
   }
+
+  .app {
+    flex-direction: row;
+  }
+
+  .app-main {
+    margin-left: 0;
+  }
 }
 
 /* Header */
@@ -1401,7 +1409,7 @@
   border-right: 1px solid var(--bg-card-border);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: auto;
   position: sticky;
   top: 0;
 }
