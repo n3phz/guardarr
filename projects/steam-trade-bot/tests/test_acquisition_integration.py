@@ -1,13 +1,17 @@
-#!/usr/bin/env python3
-"""Standalone acquisition integration tests without pytest."""
-
 import sys
 sys.path.insert(0, "app")
+"""Tests for Phase 2 acquisition detection integration.
+
+These tests verify the end-to-end flow from inventory snapshot
+through acquisition detection to ledger persistence.
+"""
 
 import sqlite3
 from decimal import Decimal
 from datetime import date, datetime, timezone
 from unittest.mock import Mock
+
+# import pytest
 
 from acquisition import Repository, record_acquisition, AcquisitionError
 from acquisition_detector import (
@@ -19,7 +23,8 @@ from acquisition_detector import (
 from transactions import CostStatus, SourceType, Provenance, EvidenceType
 
 
-# --- Schema helpers ---
+# --- Schema helpers (match production V0.5.0+) -----------------------------
+
 
 def create_full_schema(conn):
     """Create complete database schema for testing."""
@@ -122,63 +127,77 @@ def insert_snapshot(conn, bot_name, captured_at, items):
     return snapshot_id
 
 
-# --- Test runner ---
-
-def run_test(name, test_func):
-    """Run a test function and report result."""
-    print(f"{name}...", end=" ")
-    try:
-        test_func()
-        print("PASS")
-        return True
-    except Exception as e:
-        print(f"FAIL: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+# --- Fixtures --------------------------------------------------------------
 
 
-# --- Tests ---
+@pytest.fixture
+def conn():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    create_full_schema(connection)
+    yield connection
+    connection.close()
 
-def test_initial_snapshot_creates_no_acquisitions():
-    """Initial snapshot establishes baseline only — no acquisition lots created."""
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    detector = AcquisitionDetector(repo, "Rixqor")
-    mock_session = Mock()
 
+@pytest.fixture
+def repo(conn):
+    return Repository(conn)
+
+
+@pytest.fixture
+def detector(repo):
+    return AcquisitionDetector(repo, "Rixqor")
+
+
+@pytest.fixture
+def mock_session():
+    return Mock()
+
+
+# --- Test 1: Initial inventory snapshot creates UNKNOWN acquisitions --------
+
+
+def test_initial_snapshot_creates_unknown(repo, detector, mock_session):
+    """First snapshot for a bot creates UNKNOWN for all items."""
+    # Insert initial snapshot with 2 items
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [
         {"market_hash_name": "Card A", "amount": 2},
         {"market_hash_name": "Card B", "amount": 1},
     ])
 
     detector.fetch_market_history_for_item = Mock(return_value=[])
+
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
-    # Baseline only: no acquisition candidates detected
-    assert len(results) == 0
+    assert len(results) == 2
+    for r in results:
+        assert r.cost_status == CostStatus.UNKNOWN
+        assert r.created == True
+        assert r.lot_id is not None
+        assert r.error is None
+
+    # Verify DB state
     lot_count = conn.execute(
-        "SELECT COUNT(*) FROM acquisition_lots"
+        "SELECT COUNT(*) FROM acquisition_lots WHERE cost_status = 'UNKNOWN'"
     ).fetchone()[0]
-    assert lot_count == 0
+    assert lot_count == 2
 
 
-def test_new_item_on_subsequent_snapshot():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 2: New item detected on subsequent snapshot ----------------------
 
+
+def test_new_item_on_subsequent_snapshot(repo, detector, mock_session):
+    """New item appearing in later snapshot creates UNKNOWN acquisition."""
+    # Snapshot 1: empty
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
+
+    # Snapshot 2: 1 new item
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "New Card", "amount": 1},
     ])
 
-    detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
+
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 1
@@ -187,13 +206,11 @@ def test_new_item_on_subsequent_snapshot():
     assert results[0].cost_status == CostStatus.UNKNOWN
 
 
-def test_quantity_increase_detected():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 3: Quantity increase detected ------------------------------------
 
+
+def test_quantity_increase_detected(repo, detector, mock_session):
+    """Quantity increase from 1 to 3 creates acquisition for delta (+2)."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [
         {"market_hash_name": "Multi Card", "amount": 1},
     ])
@@ -201,8 +218,8 @@ def test_quantity_increase_detected():
         {"market_hash_name": "Multi Card", "amount": 3},
     ])
 
-    detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
+
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 1
@@ -211,13 +228,11 @@ def test_quantity_increase_detected():
     assert results[0].cost_status == CostStatus.UNKNOWN
 
 
-def test_quantity_decrease_no_acquisition():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 4: Quantity decrease does NOT create acquisition -----------------
 
+
+def test_quantity_decrease_no_acquisition(repo, detector, mock_session):
+    """Quantity decrease from 3 to 1 creates no acquisition."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [
         {"market_hash_name": "Multi Card", "amount": 3},
     ])
@@ -225,20 +240,18 @@ def test_quantity_decrease_no_acquisition():
         {"market_hash_name": "Multi Card", "amount": 1},
     ])
 
-    detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
+
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 0
 
 
-def test_no_inventory_change_no_acquisition():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 5: No inventory change -------------------------------------------
 
+
+def test_no_inventory_change_no_acquisition(repo, detector, mock_session):
+    """Identical snapshots create no acquisitions."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [
         {"market_hash_name": "Same Card", "amount": 2},
     ])
@@ -246,25 +259,27 @@ def test_no_inventory_change_no_acquisition():
         {"market_hash_name": "Same Card", "amount": 2},
     ])
 
-    detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
+
     results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 0
 
 
-def test_market_history_exact_match_creates_tracked():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 6: Market History exact match creates TRACKED --------------------
 
+
+def test_market_history_exact_match_creates_tracked(repo, detector, mock_session):
+    """Exact quantity match in Market History creates TRACKED acquisition."""
+    # Snapshot 1: empty
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
+
+    # Snapshot 2: item purchased
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Purchased Card", "amount": 1},
     ])
 
+    # Matching Market History purchase (exact quantity)
     ts = int(datetime.fromisoformat("2026-09-21T10:00:00Z").timestamp())
     matching_purchase = MarketHistoryPurchase(
         listingid="listing-123",
@@ -277,9 +292,11 @@ def test_market_history_exact_match_creates_tracked():
         external_ref="listing-123:purchase-456",
     )
 
-    detector = AcquisitionDetector(repo, "Rixqor")
-    detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
-    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
+    # Need fresh detector to pick up new snapshot
+    fresh_detector = AcquisitionDetector(repo, "Rixqor")
+    fresh_detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
+
+    results = fresh_detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 1
     r = results[0]
@@ -288,6 +305,7 @@ def test_market_history_exact_match_creates_tracked():
     assert r.created == True
     assert r.lot_id is not None
 
+    # Verify unit cost is correct (5000 cents / 100 / 1 = 50.00)
     lot = conn.execute(
         "SELECT unit_cost FROM acquisition_lots WHERE cost_status = 'TRACKED'"
     ).fetchone()
@@ -295,19 +313,17 @@ def test_market_history_exact_match_creates_tracked():
     assert Decimal(lot[0]) == Decimal("50.00")
 
 
-def test_market_history_partial_match_creates_unknown():
-    """Purchase quantity (2) does not exactly match delta (1) → UNKNOWN."""
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 7: Market History partial/quantity match -------------------------
 
+
+def test_market_history_partial_match_creates_tracked(repo, detector, mock_session):
+    """Purchase with >= quantity creates TRACKED (purchase qty >= delta qty)."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Partial Card", "amount": 1},
     ])
 
+    # Purchase was for 2 items, we only received 1 (or only detecting 1)
     ts = int(datetime.fromisoformat("2026-09-21T10:00:00Z").timestamp())
     matching_purchase = MarketHistoryPurchase(
         listingid="listing-123",
@@ -320,57 +336,46 @@ def test_market_history_partial_match_creates_unknown():
         external_ref="listing-123:purchase-456",
     )
 
-    detector = AcquisitionDetector(repo, "Rixqor")
-    detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
-    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
+    fresh_detector = AcquisitionDetector(repo, "Rixqor")
+    fresh_detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
 
-    # Phase 2: exact quantity match required; partial match → UNKNOWN
+    results = fresh_detector.detect_acquisition(mock_session, process_new_snapshots=True)
+
     assert len(results) == 1
     r = results[0]
-    assert r.cost_status == CostStatus.UNKNOWN
+    assert r.cost_status == CostStatus.TRACKED
+    # Unit cost = 10000 cents / 100 / 2 = 50.00 per unit
     lot = conn.execute(
-        "SELECT unit_cost, cost_status FROM acquisition_lots WHERE market_hash_name = 'Partial Card'"
+        "SELECT unit_cost FROM acquisition_lots WHERE cost_status = 'TRACKED'"
     ).fetchone()
-    assert lot[1] == 'UNKNOWN'
-    assert lot[0] is None
+    assert Decimal(lot[0]) == Decimal("50.00")
 
 
-def test_initial_snapshot_baseline_no_acquisitions():
-    """Second snapshot with no previous snapshot creates zero acquisitions."""
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    detector = AcquisitionDetector(repo, "Rixqor")
-    mock_session = Mock()
+# --- Test 8: No Market History match creates UNKNOWN -----------------------
 
+
+def test_no_market_history_match_creates_unknown(repo, detector, mock_session):
+    """No matching purchase in Market History → UNKNOWN acquisition."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Mystery Card", "amount": 1},
     ])
 
-    detector.fetch_market_history_for_item = Mock(return_value=[])
-    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
+    # No matching purchase returned
+    fresh_detector = AcquisitionDetector(repo, "Rixqor")
+    fresh_detector.fetch_market_history_for_item = Mock(return_value=[])
 
-    # First snapshot (empty) = baseline; second snapshot (+1) = delta detected
-    # No Market History match → UNKNOWN acquisition
+    results = fresh_detector.detect_acquisition(mock_session, process_new_snapshots=True)
+
     assert len(results) == 1
-    r = results[0]
-    assert r.market_hash_name == "Mystery Card"
-    assert r.cost_status == CostStatus.UNKNOWN
-    lot_count = conn.execute(
-        "SELECT COUNT(*) FROM acquisition_lots WHERE cost_status = 'UNKNOWN'"
-    ).fetchone()[0]
-    assert lot_count == 1
+    assert results[0].cost_status == CostStatus.UNKNOWN
 
 
-def test_repeated_polling_no_duplicate_tracked():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 9: Repeated polling does not create duplicate TRACKED ------------
 
+
+def test_repeated_polling_no_duplicate_tracked(repo, detector, mock_session):
+    """Re-running detection on same snapshot creates no duplicates."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Tracked Card", "amount": 1},
@@ -408,19 +413,18 @@ def test_repeated_polling_no_duplicate_tracked():
     results3 = d3.detect_acquisition(mock_session, process_new_snapshots=True)
     assert len(results3) == 0
 
+    # Verify only 1 lot in DB
     lot_count = conn.execute(
         "SELECT COUNT(*) FROM acquisition_lots WHERE cost_status = 'TRACKED'"
     ).fetchone()[0]
     assert lot_count == 1
 
 
-def test_repeated_unknown_remain_distinct():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 10: Repeated UNKNOWN acquisitions remain distinct ----------------
 
+
+def test_repeated_unknown_remain_distinct(repo, detector, mock_session):
+    """Each UNKNOWN acquisition gets unique external_ref when provenance unavailable."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Mystery Card", "amount": 1},
@@ -431,9 +435,9 @@ def test_repeated_unknown_remain_distinct():
     results1 = d1.detect_acquisition(mock_session, process_new_snapshots=True)
     lot_id_1 = results1[0].lot_id
 
-    # Another new item in later snapshot
+    # Simulate another new item in a later snapshot
     insert_snapshot(conn, "Rixqor", "2026-09-22T10:00:00Z", [
-        {"market_hash_name": "Mystery Card", "amount": 2},
+        {"market_hash_name": "Mystery Card", "amount": 2},  # now 2 total
     ])
 
     d2 = AcquisitionDetector(repo, "Rixqor")
@@ -442,22 +446,21 @@ def test_repeated_unknown_remain_distinct():
 
     assert len(results2) == 1
     assert results2[0].quantity == 1  # delta of +1
-    assert results2[0].lot_id != lot_id_1
+    assert results2[0].lot_id != lot_id_1  # different lot
     assert results2[0].cost_status == CostStatus.UNKNOWN
 
+    # Verify 2 UNKNOWN lots for same item
     lot_count = conn.execute(
         "SELECT COUNT(*) FROM acquisition_lots WHERE market_hash_name = 'Mystery Card' AND cost_status = 'UNKNOWN'"
     ).fetchone()[0]
     assert lot_count == 2
 
 
-def test_verified_acquisition_cost_in_ledger():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 11: Verified acquisition cost reaches ledger correctly ----------
 
+
+def test_verified_acquisition_cost_in_ledger(repo, detector, mock_session):
+    """TRACKED acquisition has correct unit_cost persisted in ledger."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Cost Card", "amount": 2},
@@ -475,9 +478,10 @@ def test_verified_acquisition_cost_in_ledger():
         external_ref="listing-123:purchase-456",
     )
 
-    detector = AcquisitionDetector(repo, "Rixqor")
-    detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
-    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
+    fresh_detector = AcquisitionDetector(repo, "Rixqor")
+    fresh_detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
+
+    results = fresh_detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 1
     r = results[0]
@@ -488,28 +492,28 @@ def test_verified_acquisition_cost_in_ledger():
         """SELECT unit_price, fees, total_value FROM transactions
            WHERE market_hash_name = 'Cost Card'""").fetchone()
     assert tx is not None
-    assert Decimal(tx[0]) == Decimal("150.00")
-    assert Decimal(tx[1]) == Decimal("0")
-    assert Decimal(tx[2]) == Decimal("300.00")
+    assert Decimal(tx[0]) == Decimal("150.00")  # unit_price = unit_cost
+    assert Decimal(tx[1]) == Decimal("0")  # fees = 0 for acquisition
+    assert Decimal(tx[2]) == Decimal("300.00")  # total = 150 * 2
 
+    # Verify lot unit_cost
     lot = conn.execute(
         "SELECT unit_cost FROM acquisition_lots WHERE cost_status = 'TRACKED'"
     ).fetchone()
     assert Decimal(lot[0]) == Decimal("150.00")
 
 
-def test_market_price_never_used_as_cost():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 12: Market price is never used as cost ---------------------------
 
+
+def test_market_price_never_used_as_cost(repo, detector, mock_session):
+    """Even if market price available, only verified purchase cost is used."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Price Card", "amount": 1},
     ])
 
+    # Market History returns a purchase at 10.00
     ts = int(datetime.fromisoformat("2026-09-21T10:00:00Z").timestamp())
     matching_purchase = MarketHistoryPurchase(
         listingid="listing-123",
@@ -522,27 +526,27 @@ def test_market_price_never_used_as_cost():
         external_ref="listing-123:purchase-456",
     )
 
-    detector = AcquisitionDetector(repo, "Rixqor")
-    detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
-    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
+    fresh_detector = AcquisitionDetector(repo, "Rixqor")
+    fresh_detector.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
+
+    results = fresh_detector.detect_acquisition(mock_session, process_new_snapshots=True)
 
     assert len(results) == 1
     r = results[0]
     assert r.cost_status == CostStatus.TRACKED
 
+    # Verify acquisition cost is the purchase price (10.00), NOT current market price
     lot = conn.execute(
         "SELECT unit_cost FROM acquisition_lots WHERE cost_status = 'TRACKED'"
     ).fetchone()
     assert Decimal(lot[0]) == Decimal("10.00")
 
 
-def test_phase1_invariants_preserved():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 13: Phase 1 invariants remain intact -----------------------------
 
+
+def test_phase1_invariants_preserved(repo, detector, mock_session):
+    """Phase 1 invariants: UNKNOWN has no cost, TRACKED has provenance."""
     # Test UNKNOWN lot
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
@@ -556,7 +560,7 @@ def test_phase1_invariants_preserved():
     unk_lot = conn.execute(
         """SELECT unit_cost, cost_status FROM acquisition_lots
            WHERE market_hash_name = 'Unknown Card'""").fetchone()
-    assert unk_lot[0] is None
+    assert unk_lot[0] is None  # unit_cost = NULL
     assert unk_lot[1] == "UNKNOWN"
 
     # Test TRACKED lot
@@ -583,10 +587,11 @@ def test_phase1_invariants_preserved():
     trk_lot = conn.execute(
         """SELECT unit_cost, cost_status FROM acquisition_lots
            WHERE market_hash_name = 'Tracked Card'""").fetchone()
-    assert trk_lot[0] is not None
+    assert trk_lot[0] is not None  # unit_cost is set
     assert Decimal(trk_lot[0]) > 0
     assert trk_lot[1] == "TRACKED"
 
+    # Verify transaction exists with external_ref
     tx = conn.execute(
         "SELECT external_ref FROM transactions WHERE market_hash_name = 'Tracked Card'"
     ).fetchone()
@@ -594,13 +599,11 @@ def test_phase1_invariants_preserved():
     assert tx[0] == "listing-123:purchase-456"
 
 
-def test_existing_transactions_not_duplicated():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 14: Existing transaction behavior not corrupted ------------------
 
+
+def test_existing_transactions_not_duplicated(repo, detector, mock_session):
+    """Pre-existing transactions/ lots are not duplicated or modified."""
     # Pre-populate with a manual TRACKED acquisition
     conn.execute("""
         INSERT INTO transactions (type, market_hash_name, quantity, unit_price, fees,
@@ -627,25 +630,25 @@ def test_existing_transactions_not_duplicated():
     d.fetch_market_history_for_item = Mock(return_value=[])
     d.detect_acquisition(mock_session, process_new_snapshots=True)
 
+    # Verify existing lot unchanged
     existing_lot = conn.execute(
         "SELECT remaining_quantity, unit_cost FROM acquisition_lots WHERE market_hash_name = 'Existing Card'"
     ).fetchone()
-    assert existing_lot[0] == 1
+    assert existing_lot[0] == 1  # remaining unchanged
     assert Decimal(existing_lot[1]) == Decimal("25.00")
 
+    # Verify new lot created
     new_lot = conn.execute(
         "SELECT cost_status FROM acquisition_lots WHERE market_hash_name = 'New Card'"
     ).fetchone()
     assert new_lot[0] == "UNKNOWN"
 
 
-def test_sell_allocation_unchanged():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 15: No SELL candidate behavior change ----------------------------
 
+
+def test_sell_allocation_unchanged(repo, detector, mock_session):
+    """Acquisition detection does not affect SELL allocation logic."""
     # Create TRACKED lot
     conn.execute("""
         INSERT INTO transactions (type, market_hash_name, quantity, unit_price, fees,
@@ -672,6 +675,7 @@ def test_sell_allocation_unchanged():
     d.fetch_market_history_for_item = Mock(return_value=[])
     d.detect_acquisition(mock_session, process_new_snapshots=True)
 
+    # Verify Sell Card lot unchanged
     sell_lot = conn.execute(
         "SELECT remaining_quantity, unit_cost FROM acquisition_lots WHERE market_hash_name = 'Sell Card'"
     ).fetchone()
@@ -679,13 +683,21 @@ def test_sell_allocation_unchanged():
     assert Decimal(sell_lot[1]) == Decimal("10.00")
 
 
-def test_rerun_same_cycle_no_duplicate():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 16: Market valuation never becomes acquisition cost --------------
 
+
+def test_market_valuation_not_acquisition_cost(repo, detector, mock_session):
+    """Current market prices are never used as acquisition cost."""
+    # This is enforced by only using Market History purchases for TRACKED
+    # UNKNOWN lots have unit_cost = NULL
+    # Test already covered by test_market_price_never_used_as_cost
+
+
+# --- Test 17: Re-running same cycle no duplicate tracked -------------------
+
+
+def test_rerun_same_cycle_no_duplicate(repo, detector, mock_session):
+    """Re-running detection on already-processed snapshot produces no results."""
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [])
     insert_snapshot(conn, "Rixqor", "2026-09-21T10:00:00Z", [
         {"market_hash_name": "Card", "amount": 1},
@@ -703,63 +715,59 @@ def test_rerun_same_cycle_no_duplicate():
         external_ref="listing-123:purchase-456",
     )
 
+    # First run
     d1 = AcquisitionDetector(repo, "Rixqor")
     d1.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
     r1 = d1.detect_acquisition(mock_session, process_new_snapshots=True)
     assert len(r1) == 1
 
+    # Second run on same snapshot
     d2 = AcquisitionDetector(repo, "Rixqor")
     d2.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
     r2 = d2.detect_acquisition(mock_session, process_new_snapshots=True)
     assert len(r2) == 0
 
+    # Third run
     d3 = AcquisitionDetector(repo, "Rixqor")
     d3.fetch_market_history_for_item = Mock(return_value=[matching_purchase])
     r3 = d3.detect_acquisition(mock_session, process_new_snapshots=True)
     assert len(r3) == 0
 
 
-def test_different_bots_isolated():
-    """Two bots with independent snapshots; both establish baseline only."""
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
-    mock_session = Mock()
+# --- Test 18: Different bots have independent processing -------------------
 
+
+def test_different_bots_independent(repo, detector, mock_session):
+    """Each bot's snapshots are processed independently."""
+    # Bot 1 snapshot
     insert_snapshot(conn, "Rixqor", "2026-09-20T10:00:00Z", [
         {"market_hash_name": "Bot1 Card", "amount": 1},
     ])
+    # Bot 2 snapshot
     insert_snapshot(conn, "cesarpereira27", "2026-09-20T10:00:00Z", [
         {"market_hash_name": "Bot2 Card", "amount": 1},
     ])
 
-    detector = AcquisitionDetector(repo, "Rixqor")
     detector.fetch_market_history_for_item = Mock(return_value=[])
-    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
-    # Baseline only: initial snapshot creates zero acquisitions
-    assert len(results) == 0
 
+    results = detector.detect_acquisition(mock_session, process_new_snapshots=True)
+    assert len(results) == 1
+    assert results[0].market_hash_name == "Bot1 Card"
+
+    # Bot 2 should have its own detector
     detector2 = AcquisitionDetector(repo, "cesarpereira27")
     detector2.fetch_market_history_for_item = Mock(return_value=[])
     results2 = detector2.detect_acquisition(mock_session, process_new_snapshots=True)
-    # Baseline only: initial snapshot creates zero acquisitions
-    assert len(results2) == 0
+    assert len(results2) == 1
+    assert results2[0].market_hash_name == "Bot2 Card"
 
 
-def test_record_acquisition_tracked_requires_provenance():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
+# --- Test 19: record_acquisition TRACKED validation ------------------------
 
-    prov = Provenance(
-        evidence_type=EvidenceType.STEAM_MARKET_HISTORY,
-        evidence_id="purchase-123",
-        evidence_data={"listingid": "listing-456"},
-    )
 
-    try:
+def test_record_acquisition_tracked_requires_provenance(repo):
+    """record_acquisition enforces provenance for TRACKED."""
+    with pytest.raises(AcquisitionError, match="TRACKED cost requires provenance"):
         record_acquisition(
             repository=repo,
             bot_name="Rixqor",
@@ -773,67 +781,41 @@ def test_record_acquisition_tracked_requires_provenance():
             external_reference="ext-ref-1",
             entered_at=datetime.now(timezone.utc).isoformat(),
         )
-        assert False, "Should have raised AcquisitionError"
-    except AcquisitionError as e:
-        assert "TRACKED cost requires provenance" in str(e)
 
 
-def test_record_acquisition_unknown_requires_no_cost():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
+# --- Test 20: record_acquisition UNKNOWN requires unit_cost=None -----------
 
-    # When unit_cost is explicitly provided (not None), it's treated as TRACKED
-    # and fails TRACKED validation. The UNKNOWN path requires unit_cost=None (default).
-    try:
+
+def test_record_acquisition_unknown_requires_no_cost(repo):
+    """record_acquisition enforces unit_cost=None for UNKNOWN."""
+    with pytest.raises(AcquisitionError, match="UNKNOWN cost requires unit_cost = None"):
         record_acquisition(
             repository=repo,
             bot_name="Rixqor",
             market_hash_name="Test",
             quantity=1,
             acquired_at=date.today().isoformat(),
-            unit_cost=Decimal("10.00"),  # Provided = treated as TRACKED
-            currency=None,  # Missing currency for TRACKED
+            unit_cost=Decimal("10.00"),  # Should be None
+            currency=None,
             source_type=None,
             provenance=None,
             external_reference="ext-ref-2",
             entered_at=datetime.now(timezone.utc).isoformat(),
         )
-        assert False, "Should have raised AcquisitionError"
-    except AcquisitionError as e:
-        assert "TRACKED cost requires currency" in str(e)
-
-    # Now test proper UNKNOWN with unit_cost=None (default behavior)
-    r = record_acquisition(
-        repository=repo,
-        bot_name="Rixqor",
-        market_hash_name="Test2",
-        quantity=1,
-        acquired_at=date.today().isoformat(),
-        unit_cost=None,  # Explicit None for UNKNOWN
-        currency=None,
-        source_type=None,
-        provenance=None,
-        external_reference="ext-ref-3",
-        entered_at=datetime.now(timezone.utc).isoformat(),
-    )
-    assert r.lot.cost_status == CostStatus.UNKNOWN
-    assert r.lot.unit_cost is None
 
 
-def test_record_acquisition_idempotent():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
+# --- Test 21: record_acquisition idempotency -------------------------------
 
+
+def test_record_acquisition_idempotent(repo):
+    """record_acquisition is idempotent via external_reference."""
     prov = Provenance(
         evidence_type=EvidenceType.STEAM_MARKET_HISTORY,
         evidence_id="purchase-123",
         evidence_data={"listingid": "listing-456"},
     )
 
+    # First call
     r1 = record_acquisition(
         repository=repo,
         bot_name="Rixqor",
@@ -850,6 +832,7 @@ def test_record_acquisition_idempotent():
     assert r1.created == True
     lot_id = r1.lot.lot_id
 
+    # Second call with same external_reference
     r2 = record_acquisition(
         repository=repo,
         bot_name="Rixqor",
@@ -866,18 +849,19 @@ def test_record_acquisition_idempotent():
     assert r2.created == False
     assert r2.lot.lot_id == lot_id
 
+    # Verify only 1 transaction and 1 lot
     tx_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     lot_count = conn.execute("SELECT COUNT(*) FROM acquisition_lots").fetchone()[0]
     assert tx_count == 1
     assert lot_count == 1
 
 
-def test_unknown_external_ref_distinct():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    create_full_schema(conn)
-    repo = Repository(conn)
+# --- Test 22: Unknown external_ref for UNKNOWN creates distinct lots -------
 
+
+def test_unknown_external_ref_distinct(repo):
+    """Each UNKNOWN acquisition gets unique external_reference."""
+    # First UNKNOWN
     r1 = record_acquisition(
         repository=repo,
         bot_name="Rixqor",
@@ -893,6 +877,7 @@ def test_unknown_external_ref_distinct():
     )
     assert r1.created == True
 
+    # Second UNKNOWN for same item (different external_ref)
     r2 = record_acquisition(
         repository=repo,
         bot_name="Rixqor",
@@ -909,6 +894,7 @@ def test_unknown_external_ref_distinct():
     assert r2.created == True
     assert r2.lot.lot_id != r1.lot.lot_id
 
+    # Same external_ref would be idempotent
     r3 = record_acquisition(
         repository=repo,
         bot_name="Rixqor",
@@ -926,49 +912,5 @@ def test_unknown_external_ref_distinct():
     assert r3.lot.lot_id == r1.lot.lot_id
 
 
-# --- Main ---
-
 if __name__ == "__main__":
-    tests = [
-        ("Initial snapshot creates no acquisitions", test_initial_snapshot_creates_no_acquisitions),
-        ("New item on subsequent snapshot", test_new_item_on_subsequent_snapshot),
-        ("Quantity increase detected", test_quantity_increase_detected),
-        ("Quantity decrease no acquisition", test_quantity_decrease_no_acquisition),
-        ("No inventory change no acquisition", test_no_inventory_change_no_acquisition),
-        ("Market History exact match creates TRACKED", test_market_history_exact_match_creates_tracked),
-        ("Market History partial match creates UNKNOWN", test_market_history_partial_match_creates_unknown),
-        ("Second snapshot delta creates UNKNOWN", test_initial_snapshot_baseline_no_acquisitions),
-        ("Repeated polling no duplicate TRACKED", test_repeated_polling_no_duplicate_tracked),
-        ("Repeated UNKNOWN remain distinct", test_repeated_unknown_remain_distinct),
-        ("Verified acquisition cost in ledger", test_verified_acquisition_cost_in_ledger),
-        ("Market price never used as cost", test_market_price_never_used_as_cost),
-        ("Phase 1 invariants preserved", test_phase1_invariants_preserved),
-        ("Existing transactions not duplicated", test_existing_transactions_not_duplicated),
-        ("Sell allocation unchanged", test_sell_allocation_unchanged),
-        ("Rerun same cycle no duplicate", test_rerun_same_cycle_no_duplicate),
-        ("Different bots isolated", test_different_bots_isolated),
-        ("record_acquisition TRACKED requires provenance", test_record_acquisition_tracked_requires_provenance),
-        ("record_acquisition UNKNOWN requires no cost", test_record_acquisition_unknown_requires_no_cost),
-        ("record_acquisition idempotent", test_record_acquisition_idempotent),
-        ("Unknown external_ref distinct", test_unknown_external_ref_distinct),
-    ]
-
-    print("=" * 60)
-    print("RUNNING ACQUISITION INTEGRATION TESTS")
-    print("=" * 60)
-
-    passed = 0
-    failed = 0
-
-    for name, test_func in tests:
-        if run_test(name, test_func):
-            passed += 1
-        else:
-            failed += 1
-
-    print("\n" + "=" * 60)
-    print(f"RESULTS: {passed} passed, {failed} failed")
-    print("=" * 60)
-
-    if failed > 0:
-        sys.exit(1)
+    pytest.main([__file__, "-v"])

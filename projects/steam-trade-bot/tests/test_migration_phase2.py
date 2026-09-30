@@ -17,9 +17,9 @@ import tempfile
 from pathlib import Path
 
 # Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
-from app.migrate_schema_v2 import migrate
+from migrate_schema_v2 import migrate
 
 
 def create_minimal_v1_db():
@@ -275,9 +275,9 @@ def test_existing_data_preserved():
 def test_acquisition_persistence_after_migration():
     """Test that Phase 2 acquisition detection still works after migration."""
     from decimal import Decimal
-    from app.acquisition import Repository
-    from app.acquisition_detector import AcquisitionDetector
-    from app.transactions import CostStatus
+    from acquisition import Repository
+    from acquisition_detector import AcquisitionDetector
+    from transactions import CostStatus
     
     conn = create_minimal_v1_db()
     insert_test_data(conn)

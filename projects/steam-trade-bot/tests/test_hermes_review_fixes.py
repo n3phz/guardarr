@@ -9,21 +9,21 @@ Covers all four findings:
 """
 
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, "app")
 
 import sqlite3
 from decimal import Decimal
 from datetime import date, datetime, timezone
 from unittest.mock import Mock
 
-from app.acquisition import Repository, record_acquisition, AcquisitionError
-from app.acquisition_detector import (
+from acquisition import Repository, record_acquisition, AcquisitionError
+from acquisition_detector import (
     AcquisitionDetector,
     InventorySnapshot,
     InventoryDelta,
     MarketHistoryPurchase,
 )
-from app.transactions import CostStatus, SourceType, Provenance, EvidenceType
+from transactions import CostStatus, SourceType, Provenance, EvidenceType
 
 
 # --- Schema helpers ---

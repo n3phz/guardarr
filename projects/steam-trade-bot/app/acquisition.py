@@ -19,14 +19,14 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from app.transactions import (
+from transactions import (
     Transaction,
     TransactionType,
     CostStatus,
     create_transaction,
     TransactionError,
 )
-from app.transaction_store import insert_buy_with_lot
+from transaction_store import insert_buy_with_lot
 
 
 class AcquisitionError(ValueError):
@@ -76,7 +76,7 @@ class TransactionRecord:
 
 
 # Re-export enums for downstream compatibility
-from app.transactions import SourceType, Provenance, EvidenceType, CostStatus as CostStatusEnum
+from transactions import SourceType, Provenance, EvidenceType, CostStatus as CostStatusEnum
 
 __all__ = [
     "AcquisitionError",

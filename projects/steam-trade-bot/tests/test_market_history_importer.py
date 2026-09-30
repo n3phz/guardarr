@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, "app")
 """Tests for the V0.5.5 market history importer.
 
 These tests stub the client/parser boundary with already-parsed
@@ -12,8 +14,8 @@ import pytest
 import requests
 import sqlite3
 
-from app.market_history_adapter import MarketHistoryEvent
-from app.market_history_importer import (
+from market_history_adapter import MarketHistoryEvent
+from market_history_importer import (
     ImportResult,
     MarketHistoryImportError,
     MarketHistoryImporter,
@@ -283,7 +285,7 @@ def test_no_acquisition_cost_fabricated(conn, bot_name):
 
 
 def test_buy_normalization_cost_status_unknown(conn, bot_name):
-    from app.historical_event_normalizer import normalize_market_history_event
+    from historical_event_normalizer import normalize_market_history_event
     ev = make_event(type="BUY", external_ref="buy-unknown")
     normalized = normalize_market_history_event(ev)
     assert normalized.cost_status == "UNKNOWN"

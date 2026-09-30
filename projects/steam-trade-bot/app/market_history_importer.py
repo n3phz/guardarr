@@ -21,18 +21,18 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from app.historical_event_normalizer import (
+from historical_event_normalizer import (
     HistoricalEventNormalizationError,
     NormalizedHistoricalEvent,
     normalize_market_history_event,
 )
-from app.market_history_adapter import (
+from market_history_adapter import (
     MarketHistoryEvent,
     MarketHistoryParseError,
     SteamMarketHistoryClient,
     SteamMarketHistoryParser,
 )
-from app.transactions import Transaction, create_transaction
+from transactions import Transaction, create_transaction
 
 
 @dataclass

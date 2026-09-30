@@ -28,8 +28,8 @@ from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Optional, Sequence
 
-from app.acquisition import record_acquisition, RecordedAcquisition, AcquisitionError, Repository
-from app.transactions import CostStatus, SourceType, Provenance, EvidenceType
+from acquisition import record_acquisition, RecordedAcquisition, AcquisitionError, Repository
+from transactions import CostStatus, SourceType, Provenance, EvidenceType
 
 
 class AcquisitionDetectionError(ValueError):
@@ -346,7 +346,7 @@ class AcquisitionDetector:
                     break
 
                 # Parse events using existing parser
-                from app.steam_market_history_json import adapt_response
+                from steam_market_history_json import adapt_response
                 normalized_events, errors = adapt_response(
                     raw_data,
                     account_steamid="",  # Will be filled by classifier

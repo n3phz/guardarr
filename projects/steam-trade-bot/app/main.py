@@ -627,8 +627,8 @@ def _run_acquisition_detection(bot_name: str, snapshot_id: int) -> None:
 
     The detector uses the global `session` for Steam API calls.
     """
-    from app.acquisition_detector import AcquisitionDetector
-    from app.acquisition import Repository
+    from acquisition_detector import AcquisitionDetector
+    from acquisition import Repository
 
     repo = Repository(get_db())
     detector = AcquisitionDetector(repo, bot_name)
