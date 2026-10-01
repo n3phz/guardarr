@@ -140,7 +140,7 @@ def project_transaction(
     Project a V0.5.9 normalized BUY event to a V0.5.0 Transaction.
 
     Args:
-        normalized_buy_event: NormalizedEvent from app.steam_market_history_json
+        normalized_buy_event: NormalizedEvent from steam_market_history_json
         bot_name: Bot name for the projection
 
     Returns:
@@ -205,7 +205,7 @@ def project_acquisition_lot(
     Project a V0.5.9 normalized BUY event to a V0.5.0 AcquisitionLot.
 
     Args:
-        normalized_buy_event: NormalizedEvent from app.steam_market_history_json
+        normalized_buy_event: NormalizedEvent from steam_market_history_json
         transaction_projection_id: Temporary projection ID (NOT a real DB ID)
         bot_name: Bot name for the projection
 
